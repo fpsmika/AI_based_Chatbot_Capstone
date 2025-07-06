@@ -1,0 +1,12 @@
+TransactionID,FacilityID,FacilityType,Region,BedSize,Month,Year,LoadDate,Vendor,VendorID,Manufacturer,ManufacturerID,ManufacturercatalogNum,ItemDesc,Quantity,PricePaid,TotalSpend
+2160563794	12093	Hospital	South Atlantic	1-50	8	2022	9/12/2022	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	FLEXD150SPK	STLNT KIT SYR CT D SPK FL53 150 RW 20/EA/BX	4	418	1672
+2204486386	12093	Hospital	South Atlantic	1-50	10	2022	11/9/2022	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	2001926	ID # 2001926 FLEXS-150-SPK. MEDRAD STERILE SINGLE SYRINGE PACK. CASE/50	2	418	836
+2428897302	14784	Hospital	South Atlantic	1-50	7	2022	9/6/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	SVTS	SET SWABBLE VALUE TRANSFER	1	221.5	221.5
+2428897303	14784	Hospital	South Atlantic	1-50	9	2022	9/6/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	SVTS	SET SWABBLE VALUE TRANSFER	1	221.5	221.5
+2104931337	16892	Hospital	West North Central	1-50	5	2022	6/9/2022	Medline Industries Inc	103625	Bayer Corp Div Bayer AG	223180	2161	Strip Urinalysis Reagent Clia Waived Multistix 10 Sg Glucose Bilirubin Ketone Blood Ph Protein Urobilinogen Nitrite Leucocyte Specific Gravity	1	31.06	31.06
+2525865056	16892	Hospital	West North Central	1-50	12	2022	12/22/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	XP65115VS	2 SYRINGES PER KIT (115 ML/65 ML) LARGE AND SMALL SPIKE	1	306.94	306.94
+2242445518	16913	Unknown	South Atlantic	1-50	2	2022	1/25/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	FLEXS150SPK	1-150 ML SING SYR, FLEX KIT, SPK	1	432.5	432.5
+2242409506	16913	Unknown	South Atlantic	1-50	5	2022	1/25/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	FLEXD200SPK	KIT SYRINGE DUAL QUAD PAK W/ SPIKES 200ML	10	272.6	2726
+2242354610	16913	Unknown	South Atlantic	1-50	9	2022	1/25/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	FLEXD200SPK	KIT SYRINGE DUAL QUAD PAK W/ SPIKES 200ML	15	272.6	4089
+2475740591	16968	Hospital	New England	1-50	10	2022	10/27/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	INTCSS	Intego Source Admin Set (SAS)	4	1390.5	5562
+2475740593	16968	Hospital	New England	1-50	11	2022	10/27/2023	Bayer Corp Div Bayer AG	223180	Bayer Corp Div Bayer AG	223180	INTCSS	Intego Source Admin Set (SAS)	4	1390.5	5562
