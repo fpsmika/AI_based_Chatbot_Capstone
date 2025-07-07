@@ -1,0 +1,3 @@
+Admin Email: iklinkov@sundevils.asu.edu
+Server Admin Login: azureadmin
+Password: Password!123

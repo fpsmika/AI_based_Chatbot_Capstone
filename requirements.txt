@@ -1,0 +1,9 @@
+# Production
+uvicorn>=0.15.0
+gunicorn>=20.1.0
+
+# FastAPI
+fastapi>=0.68.0
+
+# app/core/config.py
+pydantic-settings>=2.0.0

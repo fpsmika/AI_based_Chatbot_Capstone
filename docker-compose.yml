@@ -1,0 +1,11 @@
+services:
+  aibasedchatbotcapstone:
+    image: aibasedchatbotcapstone
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    environment:
+      - PYTHONPATH=/app
+    ports:
+      - 8000:8000
+    
