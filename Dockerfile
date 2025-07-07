@@ -1,7 +1,12 @@
 # For more information, please refer to https://aka.ms/vscode-docker-python
-FROM python:3-slim
+FROM python:3.10-slim
 
 EXPOSE 8000
+
+# Install system dependencies for pyodbc
+RUN apt-get update && \
+    apt-get install -y g++ unixodbc-dev unixodbc && \
+    rm -rf /var/lib/apt/lists/*
 
 # Keeps Python from generating .pyc files in the container
 ENV PYTHONDONTWRITEBYTECODE=1

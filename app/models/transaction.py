@@ -1,6 +1,6 @@
 from sqlalchemy import Column, String, Integer, Date
-from sqlalchemy.sql import func
-from app.db.base import Base
+from sqlalchemy.orm import Session
+from app.utils.db import Base  # Fixed import path
 
 class Transaction(Base):
     """
@@ -23,3 +23,11 @@ class Transaction(Base):
 
     def __repr__(self):
         return f"<Transaction {self.TransactionID} - {self.Vendor}>"
+    
+    @classmethod
+    def search_relevant(cls, db: Session, query: str, limit: int = 3):
+        """Simple keyword search - replace with vector search later"""
+        return db.query(cls).filter(
+            cls.Vendor.ilike(f"%{query}%") |
+            cls.FacilityType.ilike(f"%{query}%")
+        ).limit(limit).all()

@@ -1,16 +1,19 @@
+# Updated main.py - Replace your chat endpoint with this
+
 from fastapi import FastAPI, Depends, HTTPException
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from app.core.logging import setup_logging
 from app.core.config import settings
-from app.db.session import get_db
+from app.utils.db import get_db
+from app.services.llama_service import LlamaService  # Add this import
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import date
 import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.transaction import Transaction  
-
+from app.api.routes.chat import router as chat_router
 
 # Logging Setup
 setup_logging()
@@ -19,10 +22,21 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     message: str
 
+class ChatResponse(BaseModel):
+    response: str
+    suggestions: list[str]
+    context: str = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle management"""
     logger.info("AI Chatbot Ready...")
+    # Test Llama connection on startup
+    try:
+        test_response = LlamaService.query("Hello", max_tokens=10)
+        logger.info(f"✅ Llama API connection verified: {test_response[:50]}...")
+    except Exception as e:
+        logger.error(f"❌ Llama API connection failed: {str(e)}")
     yield
     logger.info("Shutting down AI Chatbot...")
 
@@ -43,6 +57,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(
+    chat_router,
+    prefix="/api/v1",
+    tags=["AI Chat"]
+)
+
 @app.get("/")
 def root():
     return {"message": f"{settings.PROJECT_NAME} v{settings.VERSION}"}
@@ -55,6 +75,20 @@ def readiness_check(db: Session = Depends(get_db)):
         return {"status": "ready", "database": "connected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.get("/health")
+def health_check():
+    """Simple health check without database dependency"""
+    return {"status": "healthy", "timestamp": date.today().isoformat()}
+
+@app.get("/api/v1/health/llama")
+def llama_health_check():
+    """Test Llama API connectivity"""
+    try:
+        response = LlamaService.query("Test", max_tokens=5)
+        return {"status": "healthy", "llama_response": response}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Llama API unavailable: {str(e)}")
 
 @app.get("/transactions")
 def list_transactions(db: Session = Depends(get_db)):
@@ -107,11 +141,61 @@ def get_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
     return transaction
 
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    """Chatbot endpoint"""
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest, db: Session = Depends(get_db)):
+    """AI-powered chatbot endpoint with context"""
     logger.info(f"Received chat message: {request.message}")
-    return {
-        "response": f"Received: {request.message}",
-        "suggestions": ["Order status", "Inventory check", "Supplier contact"]
-    }
+    
+    try:
+        # Get relevant transaction data for context
+        relevant_transactions = Transaction.search_relevant(db, request.message, limit=3)
+        
+        # Build context for AI
+        context = ""
+        if relevant_transactions:
+            context = "Recent transaction data:\n"
+            for tx in relevant_transactions:
+                context += f"- {tx.Vendor} ({tx.FacilityType}, {tx.Region})\n"
+        
+        # Create enhanced prompt with context
+        system_prompt = """You are an AI assistant specializing in supply chain management. 
+        Help users with transaction data, vendor information, and supply chain queries.
+        Be concise but helpful. If asked about specific data, reference the context provided."""
+        
+        enhanced_prompt = f"{system_prompt}\n\nContext: {context}\n\nUser Question: {request.message}"
+        
+        # Get AI response
+        ai_response = LlamaService.query(enhanced_prompt, max_tokens=300)
+        
+        # Generate contextual suggestions
+        suggestions = []
+        if "vendor" in request.message.lower():
+            suggestions.extend(["Show vendor analytics", "Compare vendor performance"])
+        if "transaction" in request.message.lower():
+            suggestions.extend(["View recent transactions", "Transaction by date range"])
+        if not suggestions:
+            suggestions = ["Order status", "Inventory check", "Supplier contact"]
+        
+        return ChatResponse(
+            response=ai_response,
+            suggestions=suggestions[:3],  # Limit to 3 suggestions
+            context=context if context else None
+        )
+        
+    except Exception as e:
+        logger.error(f"Chat endpoint error: {str(e)}")
+        # Fallback response
+        return ChatResponse(
+            response=f"I encountered an issue processing your request: {str(e)}. Please try again.",
+            suggestions=["Try rephrasing", "Check system status", "Contact support"]
+        )
+
+# Add a simple chat test endpoint
+@app.post("/chat/test")
+async def chat_test(request: ChatRequest):
+    """Simple chat test without database dependency"""
+    try:
+        response = LlamaService.query(request.message, max_tokens=100)
+        return {"response": response, "status": "success"}
+    except Exception as e:
+        return {"response": f"Error: {str(e)}", "status": "error"}

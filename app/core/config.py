@@ -3,14 +3,25 @@ from typing import Optional
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
+    # Add OpenRouter configuration
+    OPENROUTER_API_KEY: str = "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"
+    LLAMA_MODEL: str = "meta-llama/llama-4-scout:free"
+    
+    # Update Azure SQL settings to match your connector
+    SQL_SERVER: str = "supply-chatbot-server.database.windows.net"
+    SQL_DATABASE: str = "supply-chatbot-db"
+    SQL_USERNAME: str = "azureadmin"
+    SQL_PASSWORD: str = "Password!123"
+    SQL_DRIVER: str = "ODBC Driver 18 for SQL Server"
+
     # App Configuration
+    app_env: str = "development"
+    app_name: str = "AI Chatbot"
+    app_version: str = "0.1.0"
     PROJECT_NAME: str = "AI Chatbot"
     VERSION: str = "1.0.0"
     DESCRIPTION: str = "AI-powered supply chain chatbot"
     DEBUG: bool = False
-    
-    # API Configuration
-    api_v1_prefix: str = "/api/v1"
     
     # Database Configuration
     database_url: Optional[str] = None
@@ -19,6 +30,10 @@ class Settings(BaseSettings):
     database_name: str = "chatbot_db"
     database_user: Optional[str] = None
     database_password: Optional[str] = None
+    database_server: str = "supply-chatbot-server.database.windows.net"
+    database_username: str = "azureadmin"
+    database_driver: str = "ODBC Driver 18 for SQL Server"
+    sqlalchemy_database_uri: str = ""
     
     # Redis Configuration
     redis_host: str = "localhost"
@@ -31,8 +46,9 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     
-    # CORS Configuration
-    allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8080"]
+    # CORS Configuration - Fixed to match main.py expectation
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"]
+    allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"]  # Keep both for compatibility
     
     # Logging Configuration
     log_level: str = "INFO"
@@ -51,6 +67,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"
     
     @property
     def database_url_complete(self) -> str:
@@ -64,17 +81,7 @@ class Settings(BaseSettings):
         return (
             f"mssql+pyodbc://{self.database_user}:{self.database_password}"
             f"@{self.database_host}:{self.database_port}/{self.database_name}"
-            f"?driver=ODBC+Driver+17+for+SQL+Server"
+            f"?driver=ODBC+Driver+18+for+SQL+Server"
         )
-    
-    @property
-    def redis_url(self) -> str:
-        """Build Redis URL"""
-        if self.redis_password:
-            return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
-        return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
-    
-    DEBUG: bool = True  # Ensure this is True
-
 
 settings = Settings()
