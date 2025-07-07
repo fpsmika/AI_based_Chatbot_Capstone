@@ -1,17 +1,20 @@
 import os
 from typing import Optional
 from pydantic_settings import BaseSettings
+from typing import List
+import json
+from pydantic import validator
 
 class Settings(BaseSettings):
-    # Add OpenRouter configuration
-    OPENROUTER_API_KEY: str = "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"
+    # OpenRouter/AI Configuration (from environment only)
+    OPENROUTER_API_KEY: str
     LLAMA_MODEL: str = "meta-llama/llama-4-scout:free"
     
-    # Update Azure SQL settings to match your connector
-    SQL_SERVER: str = "supply-chatbot-server.database.windows.net"
-    SQL_DATABASE: str = "supply-chatbot-db"
-    SQL_USERNAME: str = "azureadmin"
-    SQL_PASSWORD: str = "Password!123"
+    # Azure SQL Configuration (from environment only)
+    SQL_SERVER: str
+    SQL_DATABASE: str
+    SQL_USERNAME: str
+    SQL_PASSWORD: str
     SQL_DRIVER: str = "ODBC Driver 18 for SQL Server"
 
     # App Configuration
@@ -23,32 +26,25 @@ class Settings(BaseSettings):
     DESCRIPTION: str = "AI-powered supply chain chatbot"
     DEBUG: bool = False
     
-    # Database Configuration
+    # Database Configuration (legacy fields for compatibility)
     database_url: Optional[str] = None
     database_host: str = "localhost"
     database_port: int = 1433
     database_name: str = "chatbot_db"
     database_user: Optional[str] = None
     database_password: Optional[str] = None
-    database_server: str = "supply-chatbot-server.database.windows.net"
-    database_username: str = "azureadmin"
-    database_driver: str = "ODBC Driver 18 for SQL Server"
     sqlalchemy_database_uri: str = ""
     
-    # Redis Configuration
-    redis_host: str = "localhost"
-    redis_port: int = 6379
-    redis_db: int = 0
-    redis_password: Optional[str] = None
     
-    # JWT Configuration
-    secret_key: str = "your-secret-key-change-this-in-production"
-    algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
     
-    # CORS Configuration - Fixed to match main.py expectation
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"]
-    allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"]  # Keep both for compatibility
+    # CORS Configuration
+    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"]
+    
+    @validator('ALLOWED_ORIGINS', pre=True)
+    def parse_allowed_origins(cls, v):
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(',')]
+        return v
     
     # Logging Configuration
     log_level: str = "INFO"
@@ -71,17 +67,15 @@ class Settings(BaseSettings):
     
     @property
     def database_url_complete(self) -> str:
-        """Build complete database URL from components"""
+        """Build complete database URL from environment variables"""
         if self.database_url:
             return self.database_url
         
-        if not self.database_user or not self.database_password:
-            raise ValueError("Database credentials not provided")
-        
+        # Use the Azure SQL settings from environment
         return (
-            f"mssql+pyodbc://{self.database_user}:{self.database_password}"
-            f"@{self.database_host}:{self.database_port}/{self.database_name}"
-            f"?driver=ODBC+Driver+18+for+SQL+Server"
+            f"mssql+pyodbc://{self.SQL_USERNAME}:{self.SQL_PASSWORD}"
+            f"@{self.SQL_SERVER}:1433/{self.SQL_DATABASE}"
+            f"?driver=ODBC+Driver+18+for+SQL+Server&Encrypt=yes&TrustServerCertificate=no"
         )
 
 settings = Settings()
