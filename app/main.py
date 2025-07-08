@@ -1,12 +1,11 @@
-# Updated main.py - Replace your chat endpoint with this
-
 from fastapi import FastAPI, Depends, HTTPException
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from app.core.logging import setup_logging
 from app.core.config import settings
 from app.utils.db import get_db
-from app.services.llama_service import LlamaService  # Add this import
+from app.services.llama_service import LlamaService
+from app.services.cosmos_service import get_cosmos_service  # Add this import
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import date
@@ -14,6 +13,7 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.transaction import Transaction  
 from app.api.routes.chat import router as chat_router
+from app.api.routes.cosmos import router as cosmos_router  # Add this import
 
 # Logging Setup
 setup_logging()
@@ -31,12 +31,24 @@ class ChatResponse(BaseModel):
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle management"""
     logger.info("AI Chatbot Ready...")
+    
     # Test Llama connection on startup
     try:
         test_response = LlamaService.query("Hello", max_tokens=10)
         logger.info(f"✅ Llama API connection verified: {test_response[:50]}...")
     except Exception as e:
         logger.error(f"❌ Llama API connection failed: {str(e)}")
+    
+    # Test Cosmos DB connection on startup
+    try:
+        cosmos_service = get_cosmos_service()
+        if cosmos_service.test_connection():
+            logger.info("✅ Cosmos DB connection verified")
+        else:
+            logger.error("❌ Cosmos DB connection failed")
+    except Exception as e:
+        logger.error(f"❌ Cosmos DB connection error: {str(e)}")
+    
     yield
     logger.info("Shutting down AI Chatbot...")
 
@@ -57,10 +69,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Include routers
 app.include_router(
     chat_router,
     prefix="/api/v1",
     tags=["AI Chat"]
+)
+
+app.include_router(
+    cosmos_router,
+    prefix="/api/v1/cosmos",
+    tags=["Cosmos DB"]
 )
 
 @app.get("/")
@@ -80,6 +99,44 @@ def readiness_check(db: Session = Depends(get_db)):
 def health_check():
     """Simple health check without database dependency"""
     return {"status": "healthy", "timestamp": date.today().isoformat()}
+
+@app.get("/health/full")
+def full_health_check(db: Session = Depends(get_db)):
+    """Comprehensive health check for all services"""
+    health_status = {
+        "timestamp": date.today().isoformat(),
+        "services": {}
+    }
+    
+    # Check SQL Database
+    try:
+        db.execute("SELECT 1")
+        health_status["services"]["sql_database"] = "healthy"
+    except Exception as e:
+        health_status["services"]["sql_database"] = f"unhealthy: {str(e)}"
+    
+    # Check Cosmos DB
+    try:
+        cosmos_service = get_cosmos_service()
+        if cosmos_service.test_connection():
+            health_status["services"]["cosmos_db"] = "healthy"
+        else:
+            health_status["services"]["cosmos_db"] = "unhealthy"
+    except Exception as e:
+        health_status["services"]["cosmos_db"] = f"unhealthy: {str(e)}"
+    
+    # Check Llama API
+    try:
+        response = LlamaService.query("Test", max_tokens=5)
+        health_status["services"]["llama_api"] = "healthy"
+    except Exception as e:
+        health_status["services"]["llama_api"] = f"unhealthy: {str(e)}"
+    
+    # Determine overall status
+    unhealthy_services = [k for k, v in health_status["services"].items() if "unhealthy" in v]
+    health_status["overall_status"] = "healthy" if not unhealthy_services else "degraded"
+    
+    return health_status
 
 @app.get("/api/v1/health/llama")
 def llama_health_check():
