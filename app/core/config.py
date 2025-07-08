@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     # OpenRouter/AI Configuration (from environment only)
     OPENROUTER_API_KEY: str
     LLAMA_MODEL: str = "meta-llama/llama-4-scout:free"
+
+    # Cosmos DB Configuration
+    COSMOS_DB_ENDPOINT: str
+    COSMOS_DB_KEY: str
+    COSMOS_DB_DATABASE: str = "supply_chain_db"
     
     # Azure SQL Configuration (from environment only)
     SQL_SERVER: str
