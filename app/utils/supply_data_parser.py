@@ -15,7 +15,7 @@ def csv_to_purchase_chunks(df: pd.DataFrame) -> List[Dict]:
     chunks = []
 
     for _, row in df.iterrows():
-        # Format readable string
+        
         month = MONTHS.get(int(row['Month']), f"Month-{row['Month']}")
         year = int(row['Year'])
 
@@ -25,7 +25,6 @@ def csv_to_purchase_chunks(df: pd.DataFrame) -> List[Dict]:
             f"for ${row['TotalSpend']:.2f}."
         )
 
-        # Metadata for filtering and retrieval
         metadata = {
             "transaction_id": row.get("TransactionID"),
             "facility_id": row.get("FacilityID"),
