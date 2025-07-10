@@ -13,7 +13,7 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.transaction import Transaction  
 from app.api.routes.chat import router as chat_router
-from app.api.routes.cosmos import router as cosmos_router  # Add this import
+from app.api.routes.cosmos import router as cosmos_router  
 
 # Logging Setup
 setup_logging()
@@ -39,16 +39,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Llama API connection failed: {str(e)}")
     
+    
     # Test Cosmos DB connection on startup
     try:
-        cosmos_service = get_cosmos_service()
-        if cosmos_service.test_connection():
-            logger.info("✅ Cosmos DB connection verified")
-        else:
-            logger.error("❌ Cosmos DB connection failed")
+        cosmos_container = get_cosmos_service()
+        list(cosmos_container.read_all_items(max_item_count=1))
+        logger.info("✅ Cosmos DB connection verified")
     except Exception as e:
         logger.error(f"❌ Cosmos DB connection error: {str(e)}")
-    
+
     yield
     logger.info("Shutting down AI Chatbot...")
 
@@ -115,15 +114,14 @@ def full_health_check(db: Session = Depends(get_db)):
     except Exception as e:
         health_status["services"]["sql_database"] = f"unhealthy: {str(e)}"
     
-    # Check Cosmos DB
+        # Check Cosmos DB
     try:
-        cosmos_service = get_cosmos_service()
-        if cosmos_service.test_connection():
-            health_status["services"]["cosmos_db"] = "healthy"
-        else:
-            health_status["services"]["cosmos_db"] = "unhealthy"
+        cosmos_container = get_cosmos_service()
+        list(cosmos_container.read_all_items(max_item_count=1))
+        health_status["services"]["cosmos_db"] = "healthy"
     except Exception as e:
         health_status["services"]["cosmos_db"] = f"unhealthy: {str(e)}"
+
     
     # Check Llama API
     try:
