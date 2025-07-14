@@ -17,7 +17,9 @@ from app.api.routes.cosmos import router as cosmos_router
 
 # Logging Setup
 setup_logging()
+
 logger = logging.getLogger(__name__)
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -61,12 +63,21 @@ app = FastAPI(
 )
 
 # CORS Middleware 
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=settings.ALLOWED_ORIGINS,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+logger.info(f"CORS origins at runtime: {settings.ALLOWED_ORIGINS}\n")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Include routers
 app.include_router(
