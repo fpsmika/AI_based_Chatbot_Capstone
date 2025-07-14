@@ -134,47 +134,171 @@ const MedMineChatbot = () => {
       setMessages(prev => [...prev, newMessage]);
     }
   };
+////2025.7.13 J
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim()) return;
 
-    const userMessage = {
-      id: Date.now(),
-      type: 'user',
-      content: inputValue,
-      timestamp: new Date()
+// somewhere near the top of the component – use whichever store you prefer
+const [sessionId] = useState(() => {
+  // try to re-use a session across page reloads
+  return localStorage.getItem('mmSession') ?? crypto.randomUUID();
+});
+
+useEffect(() => {
+  localStorage.setItem('mmSession', sessionId);
+}, [sessionId]);
+
+
+
+
+
+interface ChatResult {
+  response: string;
+  suggestions: string[];
+  context?: string | null;
+  session_id?: string;
+}
+/**
+ * Calls the chat API with the given message and session ID.
+ * @param message The user's message to send to the chatbot.
+ * @param sessionId Optional session ID for tracking conversation state.
+ * @returns A promise that resolves with the chatbot's response.
+ */
+async function callChat(
+  message: string,
+  sessionId?: string
+): Promise<ChatResult> {
+  const res = await fetch('http://localhost:8000/api/v1/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, session_id: sessionId }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+
+// async function callSimpleChat(
+//   message: string,
+//   sessionId?: string,
+// ): Promise<{ response: string }> {
+//   const res = await fetch(
+//      `${import.meta.env.VITE_API_BASE}/api/v1/chat`,   // e.g. http://localhost:8000/api
+//     {
+//       method: 'POST',
+//       headers: { 'Content-Type': 'application/json' },
+//       body: JSON.stringify({ message, session_id: sessionId }),
+//     },
+//   );
+
+//   if (!res.ok) {                     // 4xx / 5xx guard
+//     throw new Error(`HTTP ${res.status}`);
+//   }
+//   const data = await res.json();     // <== {response, status, …}
+
+//   if (data.status !== 'success') {   // backend-level error
+//     throw new Error(data.response ?? 'Unknown error');
+//   }
+//   return data;                       // {response: "..."}
+// }
+
+const handleSendMessage = async () => {
+  if (!inputValue.trim()) return;
+
+  const userMsg = {
+    id: Date.now(),
+    type: 'user',
+    content: inputValue,
+    timestamp: new Date(),
+  };
+  setMessages(prev => [...prev, userMsg]);
+  setInputValue('');
+  setIsLoading(true);
+
+  
+  try {
+
+   // const { response } = await callSimpleChat(inputValue, sessionId);
+const { suggestions } = await callChat(inputValue, sessionId);
+    const aiMsg = {
+      id: Date.now() + 1,
+      type: 'assistant',
+      content: (suggestions.length > 0 ? `\n\n${suggestions.join(', ')}` : ''),
+      timestamp: new Date(),
     };
-
-    setMessages(prev => [...prev, userMessage]);
-    setInputValue('');
-    setIsLoading(true);
-
-    
-    setTimeout(() => {
-      const assistantMessage = {
+    setMessages(prev => [...prev, aiMsg]);
+  } 
+  
+  
+  catch (err: unknown) {
+    console.error(err);
+    const errorMessage =
+      err instanceof Error
+        ? err.message
+        : typeof err === 'string'
+        ? err
+        : 'An unknown error occurred';
+    setMessages(prev => [
+      ...prev,
+      {
         id: Date.now() + 1,
         type: 'assistant',
-        content: generateMockResponse(inputValue),
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-      setIsLoading(false);
-    }, 1500);
-  };
+        content: `⚠️ ${errorMessage}`,
+        timestamp: new Date(),
+      },
+    ]);
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+//////
+
+//////Previous mock response code
+
+//   const handleSendMessage = async () => {
+//     if (!inputValue.trim()) return;
+
+//     const userMessage = {
+//       id: Date.now(),
+//       type: 'user',
+//       content: inputValue,
+//       timestamp: new Date()
+//     };
+
+//     setMessages(prev => [...prev, userMessage]);
+//     setInputValue('');
+//     setIsLoading(true);
+
+    
 
 
-  const generateMockResponse = (query: string): string => {
-    const lowerQuery = query.toLowerCase();
-    if (lowerQuery.includes('spending') || lowerQuery.includes('cost')) {
-      return "Based on your purchase order data, total spending on the requested items is $1,120.75. This represents a 15% increase compared to the previous period.";
-    } else if (lowerQuery.includes('vendor') || lowerQuery.includes('supplier')) {
-      return "MedSupply Co is your top vendor with 3 orders totaling $640.25, followed by FluidTech with $275.50. MedSupply Co offers competitive pricing for surgical supplies.";
-    } else if (lowerQuery.includes('department')) {
-      return "Surgery department has the highest procurement activity with 2 major orders. Emergency and ICU departments follow with significant medical supply purchases.";
-    } else {
-      return "I've analyzed your purchase order data. Could you please be more specific about what you'd like to know? I can help with spending analysis, vendor comparisons, or departmental insights.";
-    }
-  };
+//     setTimeout(() => {
+//       const assistantMessage = {
+//         id: Date.now() + 1,
+//         type: 'assistant',
+//         content: generateMockResponse(inputValue),
+//         timestamp: new Date()
+//       };
+      
+//       setMessages(prev => [...prev, assistantMessage]);
+//       setIsLoading(false);
+//      }, 2500);
+//   };
+// const generateMockResponse = (query: string): string => { return "Timeout: "+query; }
+
+
+  // const generateMockResponse = (query: string): string => {
+  //   const lowerQuery = query.toLowerCase();
+  //   if (lowerQuery.includes('spending') || lowerQuery.includes('cost')) {
+  //     return "Based on your purchase order data, total spending on the requested items is $1,120.75. This represents a 15% increase compared to the previous period.";
+  //   } else if (lowerQuery.includes('vendor') || lowerQuery.includes('supplier')) {
+  //     return "MedSupply Co is your top vendor with 3 orders totaling $640.25, followed by FluidTech with $275.50. MedSupply Co offers competitive pricing for surgical supplies.";
+  //   } else if (lowerQuery.includes('department')) {
+  //     return "Surgery department has the highest procurement activity with 2 major orders. Emergency and ICU departments follow with significant medical supply purchases.";
+  //   } else {
+  //     return "I've analyzed your purchase order data. Could you please be more specific about what you'd like to know? I can help with spending analysis, vendor comparisons, or departmental insights.";
+  //   }
+  // };
 
   interface SuggestionClickEvent {
     (suggestion: string): void;
