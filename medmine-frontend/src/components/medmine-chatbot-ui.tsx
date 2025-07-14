@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
-
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
 
 
 const Icons = {
@@ -82,19 +83,10 @@ const MedMineChatbot = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [fileData, setFileData] = useState<typeof sampleData | null>(null);
+  const [fileData, setFileData] = useState<Array<Record<string, string>> | null>(null);
   const [showFilePreview, setShowFilePreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  
-  const sampleData = [
-    { id: 1, item: 'Surgical Gloves', vendor: 'MedSupply Co', quantity: 1000, price: 450.00, department: 'Surgery' },
-    { id: 2, item: 'IV Bags', vendor: 'FluidTech', quantity: 500, price: 275.50, department: 'Emergency' },
-    { id: 3, item: 'Surgical Masks', vendor: 'SafeMed Inc', quantity: 2000, price: 180.00, department: 'ICU' },
-    { id: 4, item: 'Syringes', vendor: 'MedSupply Co', quantity: 750, price: 95.25, department: 'Pediatrics' },
-    { id: 5, item: 'Bandages', vendor: 'WoundCare Ltd', quantity: 300, price: 120.00, department: 'Surgery' }
-  ];
 
   
   const querySuggestions = [
@@ -111,31 +103,124 @@ const MedMineChatbot = () => {
 
 
 
-  interface Message {
-    id: number;
-    type: 'user' | 'assistant' | 'system';
-    content: string;
-    timestamp: Date;
-  }
-
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      setUploadedFile(file);
-      setFileData(sampleData);
-      setShowFilePreview(true);
+  const file = event.target.files?.[0];
+  if (file) {
+    setUploadedFile(file);
+    setShowFilePreview(true);
+    
+    // Helper function to process parsed data
+    const processData = (headers: string[], rows: (string | number | null | undefined)[][]) => {
+      const parsedData = rows
+        .filter(row => row.length >= headers.length && row.some(cell => cell !== null && cell !== undefined && String(cell).trim()))
+        .map((row, index) => {
+          const item: Record<string, string> = { id: String(index + 1) };
+          headers.forEach((header, i) => {
+            const cleanHeader = String(header).trim().toLowerCase().replace(/\s+/g, '_');
+            item[cleanHeader] = row[i] !== null && row[i] !== undefined ? String(row[i]).trim() : '';
+          });
+          return item;
+        });
       
-      const newMessage: Message = {
+      setFileData(parsedData);
+      
+      const newMessage = {
         id: Date.now(),
         type: 'system',
-        content: `File "${file.name}" uploaded successfully. ${sampleData.length} records loaded.`,
+        content: `File "${file.name}" uploaded successfully. ${parsedData.length} records loaded.`,
         timestamp: new Date()
       };
       setMessages(prev => [...prev, newMessage]);
+    };
+    
+    // Parse CSV files
+    if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
+      Papa.parse(file, {
+        complete: (results) => {
+          if (results.data && results.data.length > 0) {
+            const headers = results.data[0] as string[];
+            const rows = results.data.slice(1) as string[][];
+            processData(headers, rows);
+          }
+        },
+        header: false,
+        skipEmptyLines: true,
+        error: (error) => {
+          console.error('CSV parsing error:', error);
+          const errorMessage = {
+            id: Date.now(),
+            type: 'system',
+            content: `Error parsing CSV file "${file.name}": ${error.message}`,
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, errorMessage]);
+        }
+      });
+    } 
+    // Parse Excel files (.xlsx, .xls)
+    else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          
+          // Get the first worksheet
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          
+          // Convert to JSON array format
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as (string | number | null | undefined)[][];
+          
+          if (jsonData.length > 0) {
+            const headers = jsonData[0] as string[];
+            const rows = jsonData.slice(1) as (string | number | null | undefined)[][];
+            processData(headers, rows);
+          } else {
+            const errorMessage = {
+              id: Date.now(),
+              type: 'system',
+              content: `Excel file "${file.name}" appears to be empty.`,
+              timestamp: new Date()
+            };
+            setMessages(prev => [...prev, errorMessage]);
+          }
+        } catch (error) {
+          console.error('Excel parsing error:', error);
+          const errorMessage = {
+            id: Date.now(),
+            type: 'system',
+            content: `Error parsing Excel file "${file.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, errorMessage]);
+        }
+      };
+      
+      reader.onerror = () => {
+        const errorMessage = {
+          id: Date.now(),
+          type: 'system',
+          content: `Error reading file "${file.name}".`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      };
+      
+      reader.readAsArrayBuffer(file);
+    } 
+    else {
+      // Unsupported file type
+      const errorMessage = {
+        id: Date.now(),
+        type: 'system',
+        content: `File type not supported. Please upload a CSV or Excel (.xlsx, .xls) file.`,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
     }
-  };
-////2025.7.13 J
-
+  }
+};
 
 // somewhere near the top of the component – use whichever store you prefer
 const [sessionId] = useState(() => {
@@ -449,11 +534,13 @@ const { suggestions } = await callChat(inputValue, sessionId);
     th: {
       textAlign: 'left',
       padding: '4px',
-      borderBottom: '1px solid #e5e7eb'
+      borderBottom: '1px solid #e5e7eb',
+      color: '#111827',
     },
     td: {
       padding: '4px',
-      borderBottom: '1px solid #f3f4f6'
+      borderBottom: '1px solid #f3f4f6',
+      color: '#111827',
     },
     suggestionsSection: {
       padding: '16px',
@@ -746,22 +833,30 @@ const { suggestions } = await callChat(inputValue, sessionId);
               <table style={styles.table}>
                 <thead>
                   <tr>
-                    <th style={styles.th}>Item</th>
-                    <th style={styles.th}>Vendor</th>
-                    <th style={styles.th}>Qty</th>
-                    <th style={styles.th}>Price</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fileData.slice(0, 3).map((row) => (
-                    <tr key={row.id}>
-                      <td style={styles.td}>{row.item}</td>
-                      <td style={styles.td}>{row.vendor}</td>
-                      <td style={styles.td}>{row.quantity}</td>
-                      <td style={styles.td}>${row.price}</td>
+                    {fileData && fileData.length > 0 && Object.keys(fileData[0])
+                      .filter(key => key !== 'id')
+                      .slice(0, 4) // Show first 4 columns
+                      .map((key) => (
+                        <th key={key} style={styles.th}>
+                          {key.charAt(0).toUpperCase() + key.slice(1)}
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
+                  </thead>
+                  <tbody>
+                    {fileData?.slice(0, 3).map((row) => (
+                      <tr key={row.id}>
+                        {Object.keys(row)
+                          .filter(key => key !== 'id')
+                          .slice(0, 4)
+                          .map((key) => (
+                            <td key={key} style={styles.td}>
+                              {row[key]}
+                            </td>
+                         ))}
+                        </tr>
+                      ))}
+                  </tbody>
               </table>
               {fileData.length > 3 && (
                 <p style={{color: '#6b7280', marginTop: '4px', fontSize: '12px'}}>
