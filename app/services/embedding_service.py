@@ -6,10 +6,8 @@ from app.services.vector_search_service import store_embedding
 from app.services.embedding_service import embed_bulk_text   
 
 def process_and_embed_csv(file_path: str):
-    """
-    Read a CSV, convert rows to text chunks, embed them, and store them in Cosmos DB.
-    """
-    print(f"📥 Loading file: {file_path}")
+
+    print(f" Loading file: {file_path}")
     df = pd.read_csv(file_path)
 
     chunks = csv_to_purchase_chunks(df)  

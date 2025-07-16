@@ -8,10 +8,6 @@ MONTHS = {
 }
 
 def csv_to_purchase_chunks(df: pd.DataFrame) -> List[Dict]:
-    """
-    Convert each row from the supply purchase CSV into text chunks + metadata
-    for embedding and storage in Cosmos DB.
-    """
     chunks = []
 
     for _, row in df.iterrows():
