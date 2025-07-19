@@ -87,6 +87,7 @@ const MedMineChatbot = () => {
   const [showFilePreview, setShowFilePreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   
   const querySuggestions = [
@@ -100,7 +101,16 @@ const MedMineChatbot = () => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
+  // Refocus after each response completes
+  useEffect(() => {
+    if (!isLoading) {
+      inputRef.current?.focus();
+    }
+  }, [isLoading]);
 
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -391,6 +401,7 @@ const { suggestions } = await callChat(inputValue, sessionId);
 
   const handleSuggestionClick: SuggestionClickEvent = (suggestion: string) => {
     setInputValue(suggestion);
+    inputRef.current?.focus();
   };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -996,6 +1007,7 @@ const { suggestions } = await callChat(inputValue, sessionId);
           <div style={styles.inputContainer}>
             <div style={styles.inputWrapper}>
               <textarea
+                ref={inputRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyPress={handleKeyPress}
@@ -1003,6 +1015,7 @@ const { suggestions } = await callChat(inputValue, sessionId);
                 style={styles.textarea}
                 rows={3}
                 disabled={isLoading}
+                readOnly={isLoading}
                 onFocus={(e) => {
                   e.target.style.borderColor = '#2563eb';
                   e.target.style.boxShadow = '0 0 0 3px rgba(37, 99, 235, 0.1)';
