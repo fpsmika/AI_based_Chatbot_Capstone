@@ -299,35 +299,36 @@ const handleSendMessage = async () => {
   setInputValue('');
   setIsLoading(true);
 
-  
   try {
-
-   // const { response } = await callSimpleChat(inputValue, sessionId);
-const { suggestions } = await callChat(inputValue, sessionId);
+    // Call your chat API and get the full response
+    const { response, suggestions, context } = await callChat(inputValue, sessionId);
+    
+    // Create AI message with the actual response from LlamaService
     const aiMsg = {
       id: Date.now() + 1,
       type: 'assistant',
-      content: (suggestions.length > 0 ? `\n\n${suggestions.join(', ')}` : ''),
+      content: response, // Use the actual AI response here
       timestamp: new Date(),
+      suggestions: suggestions || [], // Store suggestions for potential UI use
+      context: context || null
     };
+    
     setMessages(prev => [...prev, aiMsg]);
-  } 
-  
-  
-  catch (err: unknown) {
-    console.error(err);
+  } catch (err: unknown) {
+    console.error('Chat API Error:', err);
     const errorMessage =
       err instanceof Error
         ? err.message
         : typeof err === 'string'
         ? err
         : 'An unknown error occurred';
+    
     setMessages(prev => [
       ...prev,
       {
         id: Date.now() + 1,
         type: 'assistant',
-        content: `⚠️ ${errorMessage}`,
+        content: `⚠️ Error: ${errorMessage}`,
         timestamp: new Date(),
       },
     ]);
