@@ -300,21 +300,45 @@ const handleSendMessage = async () => {
   setIsLoading(true);
 
   try {
-    // Call your chat API and get the full response
-    const { response, suggestions, context } = await callChat(inputValue, sessionId);
+    // Prepare the request payload with CSV data if available
+    const payload = {
+      message: inputValue,
+      session_id: sessionId,
+      // Include CSV data if available
+      csv_data: fileData ? {
+        filename: uploadedFile?.name || 'uploaded_file.csv',
+        headers: fileData.length > 0 ? Object.keys(fileData[0]).filter(key => key !== 'id') : [],
+        data: fileData.map(row => {
+          const { id, ...rowData } = row;
+          return rowData;
+        }),
+        row_count: fileData.length
+      } : null
+    };
+
+    // Call your chat API with the enhanced payload
+    const response = await fetch('http://localhost:8000/api/v1/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    
+    const { response: aiResponse, suggestions, context } = await response.json();
     
     // Create AI message with the actual response from LlamaService
     const aiMsg = {
       id: Date.now() + 1,
       type: 'assistant',
-      content: response, // Use the actual AI response here
+      content: aiResponse,
       timestamp: new Date(),
-      suggestions: suggestions || [], // Store suggestions for potential UI use
+      suggestions: suggestions || [],
       context: context || null
     };
     
     setMessages(prev => [...prev, aiMsg]);
-  } catch (err: unknown) {
+  } catch (err) {
     console.error('Chat API Error:', err);
     const errorMessage =
       err instanceof Error
