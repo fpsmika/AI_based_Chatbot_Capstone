@@ -87,7 +87,6 @@ const MedMineChatbot = () => {
   const [showFilePreview, setShowFilePreview] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   
   const querySuggestions = [
@@ -101,17 +100,6 @@ const MedMineChatbot = () => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-  // Focus input on first mount
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  // Refocus after each response completes
-  useEffect(() => {
-    if (!isLoading) {
-      inputRef.current?.focus();
-    }
-  }, [isLoading]);
 
 
 
@@ -312,21 +300,45 @@ const handleSendMessage = async () => {
   setIsLoading(true);
 
   try {
-    // Call your chat API and get the full response
-    const { response, suggestions, context } = await callChat(inputValue, sessionId);
+    // Prepare the request payload with CSV data if available
+    const payload = {
+      message: inputValue,
+      session_id: sessionId,
+      // Include CSV data if available
+      csv_data: fileData ? {
+        filename: uploadedFile?.name || 'uploaded_file.csv',
+        headers: fileData.length > 0 ? Object.keys(fileData[0]).filter(key => key !== 'id') : [],
+        data: fileData.map(row => {
+          const { id, ...rowData } = row;
+          return rowData;
+        }),
+        row_count: fileData.length
+      } : null
+    };
+
+    // Call your chat API with the enhanced payload
+    const response = await fetch('http://localhost:8000/api/v1/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    
+    const { response: aiResponse, suggestions, context } = await response.json();
     
     // Create AI message with the actual response from LlamaService
     const aiMsg = {
       id: Date.now() + 1,
       type: 'assistant',
-      content: response, // Use the actual AI response here
+      content: aiResponse,
       timestamp: new Date(),
-      suggestions: suggestions || [], // Store suggestions for potential UI use
+      suggestions: suggestions || [],
       context: context || null
     };
     
     setMessages(prev => [...prev, aiMsg]);
-  } catch (err: unknown) {
+  } catch (err) {
     console.error('Chat API Error:', err);
     const errorMessage =
       err instanceof Error
@@ -404,7 +416,6 @@ const handleSendMessage = async () => {
 
   const handleSuggestionClick: SuggestionClickEvent = (suggestion: string) => {
     setInputValue(suggestion);
-    inputRef.current?.focus();
   };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -1010,7 +1021,6 @@ const handleSendMessage = async () => {
           <div style={styles.inputContainer}>
             <div style={styles.inputWrapper}>
               <textarea
-                ref={inputRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyPress={handleKeyPress}
@@ -1018,7 +1028,6 @@ const handleSendMessage = async () => {
                 style={styles.textarea}
                 rows={3}
                 disabled={isLoading}
-                readOnly={isLoading}
                 onFocus={(e) => {
                   e.target.style.borderColor = '#2563eb';
                   e.target.style.boxShadow = '0 0 0 3px rgba(37, 99, 235, 0.1)';
