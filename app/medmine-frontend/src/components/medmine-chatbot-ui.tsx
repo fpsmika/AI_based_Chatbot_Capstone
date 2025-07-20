@@ -108,7 +108,7 @@ const MedMineChatbot = () => {
   if (file) {
     setUploadedFile(file);
     setShowFilePreview(true);
-    
+
     // Helper function to process parsed data
     const processData = (headers: string[], rows: (string | number | null | undefined)[][]) => {
       const parsedData = rows
@@ -132,7 +132,7 @@ const MedMineChatbot = () => {
       };
       setMessages(prev => [...prev, newMessage]);
     };
-    
+
     // Parse CSV files
     if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
       Papa.parse(file, {
@@ -221,6 +221,8 @@ const MedMineChatbot = () => {
     }
   }
 };
+
+
 
 // somewhere near the top of the component – use whichever store you prefer
 const [sessionId] = useState(() => {

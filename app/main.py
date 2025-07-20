@@ -13,7 +13,9 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.transaction import Transaction  
 from app.api.routes.chat import router as chat_router
-from app.api.routes.cosmos import router as cosmos_router  
+from app.api.routes.cosmos import router as cosmos_router from app.api.routes import process
+app.include_router(process.router, prefix="/api/v1", tags=["Process"])
+
 
 # Logging Setup
 setup_logging()
