@@ -235,57 +235,6 @@ useEffect(() => {
 
 
 
-
-interface ChatResult {
-  response: string;
-  suggestions: string[];
-  context?: string | null;
-  session_id?: string;
-}
-/**
- * Calls the chat API with the given message and session ID.
- * @param message The user's message to send to the chatbot.
- * @param sessionId Optional session ID for tracking conversation state.
- * @returns A promise that resolves with the chatbot's response.
- */
-async function callChat(
-  message: string,
-  sessionId?: string
-): Promise<ChatResult> {
-  const res = await fetch('http://localhost:8000/api/v1/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-
-// async function callSimpleChat(
-//   message: string,
-//   sessionId?: string,
-// ): Promise<{ response: string }> {
-//   const res = await fetch(
-//      `${import.meta.env.VITE_API_BASE}/api/v1/chat`,   // e.g. http://localhost:8000/api
-//     {
-//       method: 'POST',
-//       headers: { 'Content-Type': 'application/json' },
-//       body: JSON.stringify({ message, session_id: sessionId }),
-//     },
-//   );
-
-//   if (!res.ok) {                     // 4xx / 5xx guard
-//     throw new Error(`HTTP ${res.status}`);
-//   }
-//   const data = await res.json();     // <== {response, status, …}
-
-//   if (data.status !== 'success') {   // backend-level error
-//     throw new Error(data.response ?? 'Unknown error');
-//   }
-//   return data;                       // {response: "..."}
-// }
-
 const handleSendMessage = async () => {
   if (!inputValue.trim()) return;
 
@@ -308,9 +257,10 @@ const handleSendMessage = async () => {
       csv_data: fileData ? {
         filename: uploadedFile?.name || 'uploaded_file.csv',
         headers: fileData.length > 0 ? Object.keys(fileData[0]).filter(key => key !== 'id') : [],
-        data: fileData.map(row => {
-          const { id, ...rowData } = row;
-          return rowData;
+        data: fileData.map((row) => {
+          const rowCopy = { ...row };
+          delete rowCopy.id;
+          return rowCopy;
         }),
         row_count: fileData.length
       } : null
