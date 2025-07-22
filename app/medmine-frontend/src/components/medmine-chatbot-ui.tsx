@@ -88,7 +88,11 @@ const MedMineChatbot = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  
+const [currentBatch, setCurrentBatch] = useState<string | null>(null);
+const [totalRows,   setTotalRows]   = useState<number>(0);
+
+
+
   const querySuggestions = [
     "What's our total spending on gloves this year?",
     "Compare vendor A and vendor B for IV bags",
@@ -102,7 +106,7 @@ const MedMineChatbot = () => {
   }, [messages]);
 
 
-
+/*
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
   const file = event.target.files?.[0];
   if (file) {
@@ -132,7 +136,110 @@ const MedMineChatbot = () => {
       };
       setMessages(prev => [...prev, newMessage]);
     };
+*/
 
+const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  console.log("🔥 handleFileUpload fired!", event.target.files);
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  // Validate extension client‑side
+  const allowed = ['.csv', '.xlsx', '.xls'];
+  const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+  if (!allowed.includes(ext)) {
+    setMessages(m => [
+      ...m,
+      {
+        id: Date.now(),
+        type: 'system',
+        content: `Unsupported file type “${ext}”. Please upload one of: ${allowed.join(', ')}`,
+        timestamp: new Date()
+      }
+    ]);
+    return;
+  }
+
+  setUploadedFile(file);
+  setMessages(m => [
+    ...m,
+    {
+      id: Date.now(),
+      type: 'system',
+      content: `Uploading “${file.name}”…`,
+      timestamp: new Date()
+    }
+  ]);
+
+  try {
+    // 1) Send file to /process → returns batch_id with status="enqueued"
+    const fd = new FormData();
+    fd.append('file', file);
+
+    const res = await fetch('http://localhost:8000/api/v1/process', {
+      method: 'POST',
+      body: fd
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    const json = await res.json();
+    console.log("✅ process response:", json);
+
+    // accept both 'success' (old flow) or 'enqueued' (new background flow)
+    if (json.status !== 'success' && json.status !== 'enqueued') {
+      throw new Error(json.detail || 'Server processing failed');
+    }
+
+    const { batch_id, rows_loaded } = json;
+
+    // 2) Notify user
+    setMessages(m => {
+      const withoutUploading = m.slice(0, -1);
+      const verb = json.status === 'success' ? 'Processed' : 'Enqueued';
+      return [
+        ...withoutUploading,
+        {
+          id: Date.now(),
+          type: 'system',
+          content: `✅ ${verb} batch ${batch_id}: ${rows_loaded} rows.`,
+          timestamp: new Date()
+        }
+      ];
+    });
+
+    setCurrentBatch(batch_id);
+    setTotalRows(rows_loaded);
+
+    // 3) Fetch first page of data (may be empty initially—poll or let user refresh)
+    const pageRes = await fetch(
+      `http://localhost:8000/api/v1/cosmos/data/${batch_id}?offset=0&limit=100`
+    );
+    if (!pageRes.ok) throw new Error(`Paging fetch failed: ${pageRes.statusText}`);
+    const pageData: any[] = await pageRes.json();
+
+    setFileData(pageData);
+    setShowFilePreview(true);
+
+  } catch (err) {
+    console.error(err);
+    setMessages(m => {
+      const withoutUploading = m.slice(0, -1);
+      return [
+        ...withoutUploading,
+        {
+          id: Date.now(),
+          type: 'system',
+          content: `❌ Failed to process “${file.name}”: ${err instanceof Error ? err.message : err}`,
+          timestamp: new Date()
+        }
+      ];
+    });
+    setUploadedFile(null);
+    setFileData(null);
+    setShowFilePreview(false);
+  }
+};
+
+
+/*
     // Parse CSV files
     if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
       Papa.parse(file, {
@@ -222,7 +329,7 @@ const MedMineChatbot = () => {
   }
 };
 
-
+*/
 
 // somewhere near the top of the component – use whichever store you prefer
 const [sessionId] = useState(() => {

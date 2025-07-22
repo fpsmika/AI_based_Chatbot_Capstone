@@ -13,8 +13,16 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.transaction import Transaction  
 from app.api.routes.chat import router as chat_router
-from app.api.routes.cosmos import router as cosmos_router from app.api.routes import process
-app.include_router(process.router, prefix="/api/v1", tags=["Process"])
+from app.api.routes.cosmos import router as cosmos_router
+from app.api.routes.process import router as process_router
+from app.api.routes.search import router as search_router
+from fastapi import UploadFile, File
+import os
+from azure.storage.blob import BlobServiceClient
+
+
+
+
 
 
 # Logging Setup
@@ -64,6 +72,7 @@ app = FastAPI(
     redoc_url=None
 )
 
+
 # CORS Middleware 
 # app.add_middleware(
 #     CORSMiddleware,
@@ -71,6 +80,8 @@ app = FastAPI(
 #     allow_methods=["*"],
 #     allow_headers=["*"],
 # )
+
+
 
 logger.info(f"CORS origins at runtime: {settings.ALLOWED_ORIGINS}\n")
 app.add_middleware(
@@ -93,6 +104,63 @@ app.include_router(
     prefix="/api/v1/cosmos",
     tags=["Cosmos DB"]
 )
+
+app.include_router(
+    process_router,
+    prefix="/api/v1",
+    tags=["Process"]
+)
+
+app.include_router(
+    search_router,
+    prefix="/api/v1/items",
+    tags=["search"],
+)
+
+
+blob_service_client = BlobServiceClient.from_connection_string(
+    settings.AZURE_STORAGE_CONNECTION_STRING
+)
+container_client = blob_service_client.get_container_client(
+    settings.BLOB_CONTAINER_NAME
+)
+
+@app.get("/api/v1/ping-blob")
+async def ping_blob():
+    """
+    Quick check that our blob container is reachable.
+    """
+    try:
+        count = sum(1 for _ in container_client.list_blobs())
+        return {
+            "container": settings.BLOB_CONTAINER_NAME,
+            "blob_count": count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Blob ping failed: {str(e)}")
+
+@app.post("/api/v1/upload")
+async def upload_to_blob(file: UploadFile = File(...)):
+    """
+    Receive a CSV/XLS/XLSX from the frontend,
+    upload it as a blob into your raw-upload container.
+    """
+    
+    blob_name = file.filename
+
+    try:
+        data = await file.read()
+        container_client.upload_blob(
+            name=blob_name,
+            data=data,
+            overwrite=True
+        )
+        return {
+            "status": "success",
+            "message": f"Uploaded '{blob_name}' to container '{settings.BLOB_CONTAINER_NAME}'."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @app.get("/")
 def root():

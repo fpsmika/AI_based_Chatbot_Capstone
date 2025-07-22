@@ -4,12 +4,11 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from app.utils.db import get_db
 from app.services.llama_service import LlamaService
+from app.services.cosmos_service import get_cosmos_service
 from app.models.transaction import Transaction
 import logging
-import json
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 class CSVData(BaseModel):
@@ -39,13 +38,11 @@ def _generate_suggestions(message: str, has_csv: bool = False) -> List[str]:
             'date': ["Show monthly trends", "Spending over time", "Seasonal patterns"],
             'default': ["Summarize this data", "Show top 5 items", "Calculate totals by category"]
         }
-        
         for keyword, suggestions in csv_suggestions.items():
             if keyword in message.lower():
                 return suggestions
         return csv_suggestions['default']
-    
-    # Original suggestions for database queries
+
     suggestions_map = {
         'vendor': ["Show vendor analytics", "Compare vendor performance", "Top vendors by volume"],
         'supplier': ["Supplier performance metrics", "Contract expiration dates", "Supplier contact info"],
@@ -56,7 +53,6 @@ def _generate_suggestions(message: str, has_csv: bool = False) -> List[str]:
         'cost': ["Cost analysis by category", "Budget variance report", "Price trend analysis"],
         'default': ["Order status lookup", "Inventory insights", "Spending summary"]
     }
-    
     for keyword, suggestions in suggestions_map.items():
         if keyword in message.lower():
             return suggestions
@@ -67,25 +63,17 @@ def _format_csv_for_ai(csv_data: CSVData, sample_rows: int = 5) -> str:
     context = f"CSV File: {csv_data.filename}\n"
     context += f"Total Rows: {csv_data.row_count}\n"
     context += f"Columns: {', '.join(csv_data.headers)}\n\n"
-    
-    # Add sample data
     context += "Sample Data:\n"
-    sample_data = csv_data.data[:sample_rows]
-    
-    for i, row in enumerate(sample_data, 1):
+    for i, row in enumerate(csv_data.data[:sample_rows], 1):
         context += f"Row {i}:\n"
         for header in csv_data.headers:
-            value = row.get(header, 'N/A')
-            context += f"  {header}: {value}\n"
+            context += f"  {header}: {row.get(header, 'N/A')}\n"
         context += "\n"
-    
     if csv_data.row_count > sample_rows:
         context += f"... and {csv_data.row_count - sample_rows} more rows\n"
-    
     return context
 
 def _create_error_response(error: str, session_id: Optional[str]) -> ChatResponse:
-    """Create standardized error response"""
     return ChatResponse(
         response="I'm having trouble processing your request right now. Please try again later.",
         suggestions=["Try a simpler question", "Check system status", "Contact support"],
@@ -99,70 +87,64 @@ async def chat_endpoint(
     db: Session = Depends(get_db)
 ):
     """
-    Main chat endpoint with CSV upload support and database context integration
+    Main chat endpoint with CSV upload and fallback to Cosmos or SQL DB.
     """
-    logger.info(f"Received chat message: {request.message}")
-    logger.info(f"CSV data included: {request.csv_data is not None}")
-    
-    context = ""
-    
+    logger.info(f"Received chat message: {request.message!r}")
+    context: str = ""
     try:
-        # Priority 1: Use uploaded CSV data if available
-        if request.csv_data:
-            logger.info(f"Processing CSV data: {request.csv_data.filename} with {request.csv_data.row_count} rows")
+        # Priority 1: CSV path
+        if request.csv_data and request.csv_data.row_count > 0:
+            logger.info(f"Processing CSV: {request.csv_data.filename} ({request.csv_data.row_count} rows)")
             context = _format_csv_for_ai(request.csv_data)
-            
-        # Priority 2: Fall back to database transactions if no CSV
         else:
+            # Priority 2: Try Cosmos
             try:
-                relevant_transactions = Transaction.search_relevant(
-                    db, request.message, limit=5
-                )
-                if relevant_transactions:
-                    context = "Recent transaction data from database:\n" + "\n".join(
-                        f"- {tx.Vendor} ({tx.FacilityType}, {tx.Region})" 
-                        for tx in relevant_transactions
-                    )
-            except Exception as db_error:
-                logger.warning(f"Database search failed: {str(db_error)}")
-        
-        # Create enhanced prompt with context
-        system_prompt = """You are Earl, an AI assistant specializing in supply chain management and procurement data analysis. 
-        You help users analyze transaction data, vendor information, and supply chain queries.
-        
-        When analyzing CSV data, provide specific insights about:
-        - Key metrics and totals
-        - Vendor/supplier analysis
-        - Department or category breakdowns
-        - Trends and patterns
-        - Cost analysis
-        
-        Always reference specific data points from the provided context when possible.
-        Be friendly but professional and provide actionable insights."""
-        
-        enhanced_prompt = f"{system_prompt}\n\n"
-        if context:
-            if request.csv_data:
-                enhanced_prompt += f"Uploaded CSV Data to Analyze:\n{context}\n\n"
-            else:
-                enhanced_prompt += f"Database Context:\n{context}\n\n"
-        enhanced_prompt += f"User Question: {request.message}"
-        
-        # Get AI response from LlamaService
-        logger.info("Calling LlamaService...")
-        ai_response = LlamaService.query(enhanced_prompt, max_tokens=400)
-        logger.info(f"AI Response received: {ai_response[:100]}...")
-        
-        # Generate contextual suggestions
-        suggestions = _generate_suggestions(request.message.lower(), has_csv=(request.csv_data is not None))
-        
+                container = get_cosmos_service()
+                sql = f"""
+                SELECT * FROM c
+                WHERE CONTAINS(LOWER(c.item_desc), "{request.message.lower()}")
+                   OR CONTAINS(LOWER(c.vendor),      "{request.message.lower()}")
+                   OR CONTAINS(LOWER(c.manufacturer),"{request.message.lower()}")
+                """
+                items = list(container.query_items(sql, enable_cross_partition_query=True))
+                if items:
+                    lines = [
+                        f"- {i.get('vendor','N/A')} | {i.get('item_desc','N/A')} | {i.get('load_date','N/A')} | ${i.get('unit_cost','N/A')}"
+                        for i in items[:5]
+                    ]
+                    context = "Recent Cosmos DB items:\n" + "\n".join(lines)
+                else:
+                    raise ValueError("No Cosmos matches")
+            except Exception as cosmos_err:
+                logger.warning(f"Cosmos error or no data: {cosmos_err}")
+                # SQL fallback with its own guard
+                try:
+                    relevant = Transaction.search_relevant(db, request.message, limit=5)
+                    if relevant:
+                        context = (
+                            "Recent transaction data from database:\n" +
+                            "\n".join(
+                                f"- {tx.Vendor} ({tx.FacilityType}, {tx.Region})" for tx in relevant
+                            )
+                        )
+                except Exception as sql_err:
+                    logger.warning(f"SQL fallback error: {sql_err}")
+                    # both failed, context stays empty
+        # Build AI prompt
+        system_prompt = (
+            "You are Earl, an AI assistant specializing in supply chain management and procurement data analysis.\n"
+            "Reference specific data from context when possible. Be friendly yet professional."
+        )
+        prompt = f"{system_prompt}\n\nContext:\n{context}\n\nUser Question: {request.message}"
+        ai_response = LlamaService.query(prompt, max_tokens=400)
+        raw_sugs = _generate_suggestions(request.message.lower(), has_csv=bool(request.csv_data))
+        suggestions = raw_sugs or []
         return ChatResponse(
             response=ai_response,
             suggestions=suggestions[:3],
-            context=context if context else None,
+            context=context or None,
             session_id=request.session_id
         )
-        
-    except Exception as e:
-        logger.error(f"Chat endpoint error: {str(e)}", exc_info=True)
-        return _create_error_response(str(e), request.session_id)
+    except Exception as exc:
+        logger.error(f"Chat endpoint error: {exc}", exc_info=True)
+        return _create_error_response(str(exc), request.session_id)

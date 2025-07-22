@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     SQL_PASSWORD: str
     SQL_DRIVER: str = "ODBC Driver 18 for SQL Server"
 
+     # Blob Storage Configuration
+    AZURE_STORAGE_CONNECTION_STRING: str
+    BLOB_CONTAINER_NAME: str
+
     # App Configuration
     app_env: str = "development"
     app_name: str = "AI Chatbot"
@@ -30,6 +34,8 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     DESCRIPTION: str = "AI-powered supply chain chatbot"
     DEBUG: bool = False
+
+    MAX_INGEST_ROWS: int = 10000
     
     # Database Configuration (legacy fields for compatibility)
     database_url: Optional[str] = None
