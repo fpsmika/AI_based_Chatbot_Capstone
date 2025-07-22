@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
-import Papa from 'papaparse';
-import * as XLSX from 'xlsx';
+
 
 
 const Icons = {
@@ -103,122 +102,94 @@ const MedMineChatbot = () => {
 
 
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   const file = event.target.files?.[0];
-  if (file) {
-    setUploadedFile(file);
+  if (!file) return;
+
+  // Validate file type
+  const allowedTypes = ['.csv', '.xlsx', '.xls'];
+  const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+  
+  if (!allowedTypes.includes(fileExtension)) {
+    const errorMessage = {
+      id: Date.now(),
+      type: 'system',
+      content: `File type not supported. Please upload a CSV or Excel (.xlsx, .xls) file.`,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, errorMessage]);
+    return;
+  }
+
+  setUploadedFile(file);
+  
+  // Show upload in progress message
+  const uploadingMessage = {
+    id: Date.now(),
+    type: 'system',
+    content: `Uploading "${file.name}"... Please wait.`,
+    timestamp: new Date()
+  };
+  setMessages(prev => [...prev, uploadingMessage]);
+
+  try {
+    // Create FormData to send file to backend
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // Send file to backend for processing
+    const response = await fetch('http://localhost:8000/api/v1/process', {
+      method: 'POST',
+      body: formData, 
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    
+    // Check if backend returned success
+    if (result.status !== 'success') {
+      throw new Error(result.message || 'Backend processing failed');
+    }
+
+    // Store the processed data from backend
+    const processedData = result.data || [];
+    
+    // Convert backend format to frontend format if needed
+    const formattedData = processedData.map((row: Record<string, string>, index: number) => ({
+      id: String(index + 1),
+      ...row
+    }));
+
+    setFileData(formattedData);
     setShowFilePreview(true);
     
-    // Helper function to process parsed data
-    const processData = (headers: string[], rows: (string | number | null | undefined)[][]) => {
-      const parsedData = rows
-        .filter(row => row.length >= headers.length && row.some(cell => cell !== null && cell !== undefined && String(cell).trim()))
-        .map((row, index) => {
-          const item: Record<string, string> = { id: String(index + 1) };
-          headers.forEach((header, i) => {
-            const cleanHeader = String(header).trim().toLowerCase().replace(/\s+/g, '_');
-            item[cleanHeader] = row[i] !== null && row[i] !== undefined ? String(row[i]).trim() : '';
-          });
-          return item;
-        });
-      
-      setFileData(parsedData);
-      
-      const newMessage = {
-        id: Date.now(),
-        type: 'system',
-        content: `File "${file.name}" uploaded successfully. ${parsedData.length} records loaded.`,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, newMessage]);
+    // Success message
+    const successMessage = {
+      id: Date.now() + 1,
+      type: 'system',
+      content: `File "${file.name}" processed successfully. ${processedData.length} records loaded.`,
+      timestamp: new Date()
     };
+    setMessages(prev => [...prev.slice(0, -1), successMessage]); // Replace uploading message
     
-    // Parse CSV files
-    if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
-      Papa.parse(file, {
-        complete: (results) => {
-          if (results.data && results.data.length > 0) {
-            const headers = results.data[0] as string[];
-            const rows = results.data.slice(1) as string[][];
-            processData(headers, rows);
-          }
-        },
-        header: false,
-        skipEmptyLines: true,
-        error: (error) => {
-          console.error('CSV parsing error:', error);
-          const errorMessage = {
-            id: Date.now(),
-            type: 'system',
-            content: `Error parsing CSV file "${file.name}": ${error.message}`,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, errorMessage]);
-        }
-      });
-    } 
-    // Parse Excel files (.xlsx, .xls)
-    else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
-          
-          // Get the first worksheet
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
-          
-          // Convert to JSON array format
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as (string | number | null | undefined)[][];
-          
-          if (jsonData.length > 0) {
-            const headers = jsonData[0] as string[];
-            const rows = jsonData.slice(1) as (string | number | null | undefined)[][];
-            processData(headers, rows);
-          } else {
-            const errorMessage = {
-              id: Date.now(),
-              type: 'system',
-              content: `Excel file "${file.name}" appears to be empty.`,
-              timestamp: new Date()
-            };
-            setMessages(prev => [...prev, errorMessage]);
-          }
-        } catch (error) {
-          console.error('Excel parsing error:', error);
-          const errorMessage = {
-            id: Date.now(),
-            type: 'system',
-            content: `Error parsing Excel file "${file.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, errorMessage]);
-        }
-      };
-      
-      reader.onerror = () => {
-        const errorMessage = {
-          id: Date.now(),
-          type: 'system',
-          content: `Error reading file "${file.name}".`,
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, errorMessage]);
-      };
-      
-      reader.readAsArrayBuffer(file);
-    } 
-    else {
-      // Unsupported file type
-      const errorMessage = {
-        id: Date.now(),
-        type: 'system',
-        content: `File type not supported. Please upload a CSV or Excel (.xlsx, .xls) file.`,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-    }
+  } catch (error) {
+    console.error('File upload error:', error);
+    
+    const errorMessage = {
+      id: Date.now() + 1,
+      type: 'system',
+      content: `Error processing file "${file.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev.slice(0, -1), errorMessage]); // Replace uploading message
+    
+    // Clear file state on error
+    setUploadedFile(null);
+    setFileData(null);
+    setShowFilePreview(false);
   }
 };
 
@@ -234,57 +205,6 @@ useEffect(() => {
 
 
 
-
-
-interface ChatResult {
-  response: string;
-  suggestions: string[];
-  context?: string | null;
-  session_id?: string;
-}
-/**
- * Calls the chat API with the given message and session ID.
- * @param message The user's message to send to the chatbot.
- * @param sessionId Optional session ID for tracking conversation state.
- * @returns A promise that resolves with the chatbot's response.
- */
-async function callChat(
-  message: string,
-  sessionId?: string
-): Promise<ChatResult> {
-  const res = await fetch('http://localhost:8000/api/v1/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-
-// async function callSimpleChat(
-//   message: string,
-//   sessionId?: string,
-// ): Promise<{ response: string }> {
-//   const res = await fetch(
-//      `${import.meta.env.VITE_API_BASE}/api/v1/chat`,   // e.g. http://localhost:8000/api
-//     {
-//       method: 'POST',
-//       headers: { 'Content-Type': 'application/json' },
-//       body: JSON.stringify({ message, session_id: sessionId }),
-//     },
-//   );
-
-//   if (!res.ok) {                     // 4xx / 5xx guard
-//     throw new Error(`HTTP ${res.status}`);
-//   }
-//   const data = await res.json();     // <== {response, status, …}
-
-//   if (data.status !== 'success') {   // backend-level error
-//     throw new Error(data.response ?? 'Unknown error');
-//   }
-//   return data;                       // {response: "..."}
-// }
 
 const handleSendMessage = async () => {
   if (!inputValue.trim()) return;
@@ -308,9 +228,10 @@ const handleSendMessage = async () => {
       csv_data: fileData ? {
         filename: uploadedFile?.name || 'uploaded_file.csv',
         headers: fileData.length > 0 ? Object.keys(fileData[0]).filter(key => key !== 'id') : [],
-        data: fileData.map(row => {
-          const { id, ...rowData } = row;
-          return rowData;
+        data: fileData.map((row) => {
+          const rowCopy = { ...row };
+          delete rowCopy.id;
+          return rowCopy;
         }),
         row_count: fileData.length
       } : null
@@ -423,6 +344,30 @@ const handleSendMessage = async () => {
       e.preventDefault();
       handleSendMessage();
     }
+  };
+
+  const downloadChat = () => {
+    // Create chat content
+    const chatContent = messages.map(msg => {
+      const timestamp = msg.timestamp.toLocaleString();
+      const sender = msg.type === 'user' ? 'You' : msg.type === 'assistant' ? 'Earl' : 'System';
+      return `[${timestamp}] ${sender}: ${msg.content}`;
+    }).join('\n\n');
+
+    // Add header
+    const header = `MedMine Chat Export\nDate: ${new Date().toLocaleString()}\n${uploadedFile ? `Data File: ${uploadedFile.name}` : 'No data file uploaded'}\n${'='.repeat(50)}\n\n`;
+    const fullContent = header + chatContent;
+
+    // Create blob and download
+    const blob = new Blob([fullContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `medmine-chat-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
 
@@ -927,6 +872,8 @@ const handleSendMessage = async () => {
             <div style={styles.chatActions}>
               <button
                 style={styles.actionButton}
+                onClick={downloadChat}
+                title="Download chat history"
                 onMouseEnter={(e) => {
                   (e.target as HTMLButtonElement).style.color = '#374151';
                   (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
@@ -937,19 +884,6 @@ const handleSendMessage = async () => {
                 }}
               >
                 <Icons.Download />
-              </button>
-              <button
-                style={styles.actionButton}
-                onMouseEnter={(e) => {
-                  (e.target as HTMLButtonElement).style.color = '#374151';
-                  (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
-                }}
-                onMouseLeave={(e) => {
-                  (e.target as HTMLButtonElement).style.color = '#6b7280';
-                  (e.target as HTMLButtonElement).style.backgroundColor = 'transparent';
-                }}
-              >
-                <Icons.Settings />
               </button>
             </div>
           </div>
