@@ -88,13 +88,6 @@ const MedMineChatbot = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   
-  const querySuggestions = [
-    "What's our total spending on gloves this year?",
-    "Compare vendor A and vendor B for IV bags",
-    "Which department purchased the most items?",
-    "Show me the top 5 most expensive purchases",
-    "How has our PPE spending changed over time?"
-  ];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -218,6 +211,7 @@ const handleSendMessage = async () => {
   setMessages(prev => [...prev, userMsg]);
   setInputValue('');
   setIsLoading(true);
+  fetchChatHistory();
 
   try {
     // Prepare the request payload with CSV data if available
@@ -331,13 +325,7 @@ const handleSendMessage = async () => {
   //   }
   // };
 
-  interface SuggestionClickEvent {
-    (suggestion: string): void;
-  }
 
-  const handleSuggestionClick: SuggestionClickEvent = (suggestion: string) => {
-    setInputValue(suggestion);
-  };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -368,6 +356,61 @@ const handleSendMessage = async () => {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+  const [chatHistory, setChatHistory] = useState<Array<{
+    id: string;
+    title: string;
+    created_at: string;
+    message_count: number;
+  }>>([]);
+  const [, setCurrentChatId] = useState<string | null>(null);
+
+  // Fetch chat history on component mount
+  useEffect(() => {
+    fetchChatHistory();
+  }, []);
+
+  const fetchChatHistory = async () => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/v1/chat/history?session_id=${sessionId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setChatHistory(data.chats || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch chat history:', error);
+    }
+  };
+
+  const loadChatSession = async (chatId: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/v1/chat/session/${chatId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setMessages(data.messages || []);
+        setCurrentChatId(chatId);
+        if (data.file_info) {
+          // Restore file information if available
+          setUploadedFile(data.file_info);
+          setFileData(data.file_data);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load chat session:', error);
+    }
+  };
+
+  const createNewChat = () => {
+    setMessages([{
+      id: 1,
+      type: 'assistant',
+      content: "Hello! I'm Earl, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
+      timestamp: new Date()
+    }]);
+    setCurrentChatId(null);
+    setUploadedFile(null);
+    setFileData(null);
+    setShowFilePreview(false);
   };
 
 
@@ -837,25 +880,80 @@ const handleSendMessage = async () => {
           </div>
         )}
 
-        {/* searching suggestion */}
+        {/* chat history */}
         <div style={styles.suggestionsSection}>
-          <h3 style={styles.suggestionsTitle}>Quick Questions</h3>
-          <div>
-            {querySuggestions.map((suggestion, index) => (
-              <button
-                key={index}
-                onClick={() => handleSuggestionClick(suggestion)}
-                style={styles.suggestion}
-                onMouseEnter={(e) => {
-                  (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
-                }}
-                onMouseLeave={(e) => {
-                  (e.target as HTMLButtonElement).style.backgroundColor = 'transparent';
-                }}
-              >
-                {suggestion}
-              </button>
-            ))}
+          <h3 style={styles.suggestionsTitle}>Chat History</h3>
+          <button
+            onClick={createNewChat}
+            style={{
+              ...styles.uploadButton,
+              marginBottom: '12px',
+              padding: '10px',
+              fontSize: '14px',
+              fontWeight: '500',
+              color: '#2563eb',
+              backgroundColor: '#eff6ff',
+              border: '1px solid #dbeafe'
+            }}
+            onMouseEnter={(e) => {
+              (e.target as HTMLButtonElement).style.backgroundColor = '#dbeafe';
+            }}
+            onMouseLeave={(e) => {
+              (e.target as HTMLButtonElement).style.backgroundColor = '#eff6ff';
+            }}
+          >
+            + New Chat
+          </button>
+          <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 450px)' }}>
+            {chatHistory.length > 0 ? (
+              chatHistory.map((chat) => (
+                <button
+                  key={chat.id}
+                  onClick={() => loadChatSession(chat.id)}
+                  style={{
+                    ...styles.suggestion,
+                    textAlign: 'left',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    padding: '12px',
+                    borderBottom: '1px solid #e5e7eb'
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.target as HTMLButtonElement).style.backgroundColor = 'transparent';
+                  }}
+                >
+                  <div style={{ 
+                    fontSize: '14px', 
+                    fontWeight: '500',
+                    color: '#111827',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}>
+                    {chat.title || 'Untitled Chat'}
+                  </div>
+                  <div style={{ 
+                    fontSize: '12px', 
+                    color: '#6b7280' 
+                  }}>
+                    {new Date(chat.created_at).toLocaleDateString()} - {chat.message_count} messages
+                  </div>
+                </button>
+              ))
+            ) : (
+              <p style={{ 
+                fontSize: '14px', 
+                color: '#6b7280', 
+                textAlign: 'center',
+                padding: '20px'
+              }}>
+                No chat history yet
+              </p>
+            )}
           </div>
         </div>
       </div>
