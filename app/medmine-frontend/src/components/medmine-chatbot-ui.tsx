@@ -372,7 +372,7 @@ const handleSendMessage = async () => {
 
   const fetchChatHistory = async () => {
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/chat/history?session_id=${sessionId}`);
+      const response = await fetch(`http://localhost:8000/api/v1/cosmos/chats/${sessionId}`);
       if (response.ok) {
         const data = await response.json();
         setChatHistory(data.chats || []);
@@ -384,7 +384,7 @@ const handleSendMessage = async () => {
 
   const loadChatSession = async (chatId: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/v1/chat/session/${chatId}`);
+      const response = await fetch(`http://localhost:8000/api/v1/cosmos/chats/${sessionId}`);
       if (response.ok) {
         const data = await response.json();
         setMessages(data.messages || []);
