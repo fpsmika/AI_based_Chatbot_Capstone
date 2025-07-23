@@ -54,6 +54,7 @@ def _run_pipeline_and_write(temp_path: str, filename: str, batch_id: str):
             rec["id"]       = str(uuid.uuid4())
             rec["batch_id"] = batch_id
             cosmos.create_item(body=rec)
+            count=+1
 
         print(f"✅ Batch {batch_id}: wrote {len(df)} rows for {filename}")
     except Exception as e:

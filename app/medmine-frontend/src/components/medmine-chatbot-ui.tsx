@@ -214,6 +214,7 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     );
     if (!pageRes.ok) throw new Error(`Paging fetch failed: ${pageRes.statusText}`);
     const pageData: any[] = await pageRes.json();
+    console.log("⚙️ Retrieved pageData from Cosmos:", pageData);
 
     setFileData(pageData);
     setShowFilePreview(true);
@@ -330,6 +331,17 @@ const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
 };
 
 */
+// Somewhere near the top of your component:
+async function fetchBatchData(batchId: string, offset = 0, limit = 100) {
+  const res = await fetch(
+    `http://localhost:8000/api/v1/cosmos/data/${batchId}?offset=${offset}&limit=${limit}`
+  );
+  if (!res.ok) {
+    console.error("Fetch error:", res.statusText);
+    return [];
+  }
+  return (await res.json()) as any[];
+}
 
 // somewhere near the top of the component – use whichever store you prefer
 const [sessionId] = useState(() => {
@@ -621,6 +633,8 @@ const handleSendMessage = async () => {
       fontSize: '14px',
       color: '#166534'
     },
+
+    
     previewButton: {
       fontSize: '12px',
       color: '#2563eb',
@@ -949,6 +963,30 @@ const handleSendMessage = async () => {
               </button>
             </div>
           )}
+
+
+          {uploadedFile && currentBatch && (
+            <button
+              onClick={async () => {
+                const data = await fetchBatchData(currentBatch);
+                console.log("🔄 refreshed data:", data);
+                setFileData(data);
+                setShowFilePreview(true);
+              }}
+              style={{
+                marginTop: '8px',
+                padding: '8px 12px',
+                backgroundColor: '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+            >
+              Refresh Data from Cosmos
+            </button>
+          )}
+
         </div>
 
         {/* preview */}
