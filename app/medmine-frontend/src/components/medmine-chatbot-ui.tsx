@@ -410,6 +410,7 @@ async function callChat(
 const handleSendMessage = async () => {
   if (!inputValue.trim()) return;
 
+  // 1️⃣ Add the user’s message to chat
   const userMsg = {
     id: Date.now(),
     type: 'user',
@@ -421,53 +422,46 @@ const handleSendMessage = async () => {
   setIsLoading(true);
 
   try {
-    // Prepare the request payload with CSV data if available
+    // 2️⃣ Build payload (with optional CSV)
     const payload = {
       message: inputValue,
       session_id: sessionId,
-      // Include CSV data if available
-      csv_data: fileData ? {
-        filename: uploadedFile?.name || 'uploaded_file.csv',
-        headers: fileData.length > 0 ? Object.keys(fileData[0]).filter(key => key !== 'id') : [],
-        data: fileData.map(row => {
-          const { id, ...rowData } = row;
-          return rowData;
-        }),
-        row_count: fileData.length
-      } : null
+      csv_data: fileData && fileData.length > 0
+        ? {
+            filename: uploadedFile?.name || 'uploaded_file.csv',
+            headers: Object.keys(fileData[0]).filter(k => k !== 'id'),
+            data: fileData.map(({ id, ...rest }) => rest),
+            row_count: fileData.length,
+          }
+        : null,
     };
 
-    // Call your chat API with the enhanced payload
+    // 3️⃣ Call your chat endpoint
     const response = await fetch('http://localhost:8000/api/v1/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    
-    const { response: aiResponse, suggestions, context } = await response.json();
-    
-    // Create AI message with the actual response from LlamaService
+
+    const { response: aiText, suggestions, context } = await response.json();
+
+    // 4️⃣ Build the assistant’s message
     const aiMsg = {
       id: Date.now() + 1,
       type: 'assistant',
-      content: aiResponse,
+      content: aiText,
       timestamp: new Date(),
+      // Attach context (if any) so you can render it
+      context,
+      // Attach suggestions array (if any)
       suggestions: suggestions || [],
-      context: context || null
     };
-    
+
     setMessages(prev => [...prev, aiMsg]);
   } catch (err) {
     console.error('Chat API Error:', err);
-    const errorMessage =
-      err instanceof Error
-        ? err.message
-        : typeof err === 'string'
-        ? err
-        : 'An unknown error occurred';
-    
+    const errorMessage = err instanceof Error ? err.message : String(err);
     setMessages(prev => [
       ...prev,
       {

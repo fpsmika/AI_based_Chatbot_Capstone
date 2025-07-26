@@ -6,18 +6,9 @@ from datetime import datetime, date
 import pandas as pd
 import numpy as np
 
-from azure.cosmos import CosmosClient
-from app.core.config import settings
+from app.services.cosmos_service import get_cosmos_service
 
 router = APIRouter()
-
-def get_container():
-    client = CosmosClient(
-        settings.COSMOS_DB_ENDPOINT,
-        settings.COSMOS_DB_KEY
-    )
-    db = client.get_database_client(settings.COSMOS_DB_DATABASE)
-    return db.get_container_client("supply_records")
 
 
 @router.post("/cosmos/test")
@@ -25,7 +16,7 @@ async def test_cosmos():
     """
     Smoke‑test: write a tiny document to Cosmos and confirm it succeeded.
     """
-    container = get_container()
+    container = get_cosmos_service()
 
     doc = {
         "id": "test-1",
@@ -33,7 +24,7 @@ async def test_cosmos():
         "foo": "bar"
     }
     try:
-       container.upsert_item(body=doc)
+        container.upsert_item(doc)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Cosmos write failed: {e}")
 
@@ -47,21 +38,20 @@ class BatchUploadResponse(BaseModel):
 
 def _write_batch(records: List[Dict[str, Any]], batch_id: str):
     """
-    Background task that actually writes each record,
+    Background task that writes each record,
     stamping them with batch_id for paging later.
     Converts any datetime-like objects to ISO strings before write.
     """
-    container = get_container()
+    container = get_cosmos_service()
     for rec in records:
         rec["batch_id"] = batch_id
         # JSON‑serialize any datetime-like values
         for k, v in list(rec.items()):
             if isinstance(v, (datetime, date, pd.Timestamp, np.datetime64)):
-                # convert numpy datetime64 via pandas
                 if isinstance(v, np.datetime64):
                     v = pd.to_datetime(v)
                 rec[k] = v.isoformat()
-        container.create_item(body=rec)
+        container.upsert_item(rec)
 
 
 @router.post("/data/upload", response_model=BatchUploadResponse)
@@ -92,7 +82,7 @@ async def get_records_by_batch(
     """
     Retrieve a page of records for the given batch_id.
     """
-    container = get_container()
+    container = get_cosmos_service()
 
     query = """
         SELECT * FROM c

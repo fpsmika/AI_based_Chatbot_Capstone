@@ -28,6 +28,7 @@ class ChatResponse(BaseModel):
     context: Optional[str] = Field(None, description="Contextual information used")
     session_id: Optional[str] = Field(None, description="Session identifier")
 
+
 def _generate_suggestions(message: str, has_csv: bool = False) -> List[str]:
     """Generate contextual suggestions based on message content"""
     if has_csv:
@@ -58,6 +59,7 @@ def _generate_suggestions(message: str, has_csv: bool = False) -> List[str]:
             return suggestions
     return suggestions_map['default']
 
+
 def _format_csv_for_ai(csv_data: CSVData, sample_rows: int = 5) -> str:
     """Format CSV data for AI context with sample rows"""
     context = f"CSV File: {csv_data.filename}\n"
@@ -73,7 +75,9 @@ def _format_csv_for_ai(csv_data: CSVData, sample_rows: int = 5) -> str:
         context += f"... and {csv_data.row_count - sample_rows} more rows\n"
     return context
 
+
 def _create_error_response(error: str, session_id: Optional[str]) -> ChatResponse:
+    """Construct a fallback error response"""
     return ChatResponse(
         response="I'm having trouble processing your request right now. Please try again later.",
         suggestions=["Try a simpler question", "Check system status", "Contact support"],
@@ -81,15 +85,26 @@ def _create_error_response(error: str, session_id: Optional[str]) -> ChatRespons
         session_id=session_id
     )
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post(
+    "/chat",
+    response_model=ChatResponse,
+    summary="Handle chat queries with CSV, Cosmos, and SQL fallback",
+    tags=["chat"]
+)
 async def chat_endpoint(
     request: ChatRequest,
     db: Session = Depends(get_db)
-):
+) -> ChatResponse:
     """
-    Main chat endpoint with CSV upload and fallback to Cosmos or SQL DB.
+    Main chat endpoint:
+    1. Uses uploaded CSV data if present
+    2. Falls back to Cosmos DB SQL query
+    3. Falls back to relational DB via Transaction.search_relevant
     """
     logger.info(f"Received chat message: {request.message!r}")
+    if not request.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
     context: str = ""
     try:
         # Priority 1: CSV path
@@ -130,6 +145,7 @@ async def chat_endpoint(
                 except Exception as sql_err:
                     logger.warning(f"SQL fallback error: {sql_err}")
                     # both failed, context stays empty
+
         # Build AI prompt
         system_prompt = (
             "You are Earl, an AI assistant specializing in supply chain management and procurement data analysis.\n"
@@ -137,14 +153,18 @@ async def chat_endpoint(
         )
         prompt = f"{system_prompt}\n\nContext:\n{context}\n\nUser Question: {request.message}"
         ai_response = LlamaService.query(prompt, max_tokens=400)
-        raw_sugs = _generate_suggestions(request.message.lower(), has_csv=bool(request.csv_data))
-        suggestions = raw_sugs or []
+
+        # Generate suggestions
+        suggestions = _generate_suggestions(request.message, has_csv=bool(request.csv_data))[:3]
+
         return ChatResponse(
             response=ai_response,
-            suggestions=suggestions[:3],
+            suggestions=suggestions,
             context=context or None,
             session_id=request.session_id
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Chat endpoint error: {exc}", exc_info=True)
         return _create_error_response(str(exc), request.session_id)
