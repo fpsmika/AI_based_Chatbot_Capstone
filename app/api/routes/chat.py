@@ -1,11 +1,14 @@
+# app/api/routes/chat.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from app.utils.db import get_db
 from app.services.llama_service import LlamaService
-from app.services.cosmos_service import get_cosmos_service
-from app.models.transaction import Transaction
+from app.services.sql_service import get_sql_service
+from app.services.embedding_service import query_similar_embeddings  # Updated import
+from app.services.ai_search_service import get_ai_search_service  # Updated import
+from app.core.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -27,144 +30,315 @@ class ChatResponse(BaseModel):
     suggestions: List[str] = Field(default_factory=list, description="Suggested follow-up questions")
     context: Optional[str] = Field(None, description="Contextual information used")
     session_id: Optional[str] = Field(None, description="Session identifier")
+    sources: Optional[List[Dict[str, Any]]] = Field(None, description="Data sources used")
 
+SUGGESTIONS_MAP = {
+    'total': ["What's the total value?", "Show me a summary", "Which vendor has the highest total?"],
+    'vendor': ["Compare vendors", "Top vendors by volume", "Vendor performance analysis"],
+    'department': ["Department spending breakdown", "Which department spends most?", "Department comparison"],
+    'date': ["Show monthly trends", "Spending over time", "Seasonal patterns"],
+    'transaction': ["View recent transactions", "Transaction by date range"],
+    'default': ["Summarize this data", "Show top 5 items", "Calculate totals by category"]
+}
 
-def _generate_suggestions(message: str, has_csv: bool = False) -> List[str]:
-    """Generate contextual suggestions based on message content"""
-    if has_csv:
-        csv_suggestions = {
-            'total': ["What's the total value?", "Show me a summary", "Which vendor has the highest total?"],
-            'vendor': ["Compare vendors", "Top vendors by volume", "Vendor performance analysis"],
-            'department': ["Department spending breakdown", "Which department spends most?", "Department comparison"],
-            'date': ["Show monthly trends", "Spending over time", "Seasonal patterns"],
-            'default': ["Summarize this data", "Show top 5 items", "Calculate totals by category"]
-        }
-        for keyword, suggestions in csv_suggestions.items():
-            if keyword in message.lower():
-                return suggestions
-        return csv_suggestions['default']
-
-    suggestions_map = {
-        'vendor': ["Show vendor analytics", "Compare vendor performance", "Top vendors by volume"],
-        'supplier': ["Supplier performance metrics", "Contract expiration dates", "Supplier contact info"],
-        'transaction': ["View recent transactions", "Transaction by date range", "Monthly spending trends"],
-        'purchase': ["Purchase order status", "Pending approvals", "Requisition tracking"],
-        'hospital': ["Filter by facility type", "Regional analysis", "Facility spending comparison"],
-        'clinic': ["Clinic-specific reports", "Departmental spending", "Inventory levels"],
-        'cost': ["Cost analysis by category", "Budget variance report", "Price trend analysis"],
-        'default': ["Order status lookup", "Inventory insights", "Spending summary"]
-    }
-    for keyword, suggestions in suggestions_map.items():
-        if keyword in message.lower():
+def _generate_suggestions(message: str) -> List[str]:
+    """Generate contextual follow-up suggestions"""
+    message_lower = message.lower()
+    for keyword, suggestions in SUGGESTIONS_MAP.items():
+        if keyword in message_lower:
             return suggestions
-    return suggestions_map['default']
+    return SUGGESTIONS_MAP['default']
 
-
-def _format_csv_for_ai(csv_data: CSVData, sample_rows: int = 5) -> str:
-    """Format CSV data for AI context with sample rows"""
-    context = f"CSV File: {csv_data.filename}\n"
-    context += f"Total Rows: {csv_data.row_count}\n"
-    context += f"Columns: {', '.join(csv_data.headers)}\n\n"
-    context += "Sample Data:\n"
-    for i, row in enumerate(csv_data.data[:sample_rows], 1):
-        context += f"Row {i}:\n"
-        for header in csv_data.headers:
-            context += f"  {header}: {row.get(header, 'N/A')}\n"
-        context += "\n"
-    if csv_data.row_count > sample_rows:
-        context += f"... and {csv_data.row_count - sample_rows} more rows\n"
-    return context
-
-
-def _create_error_response(error: str, session_id: Optional[str]) -> ChatResponse:
-    """Construct a fallback error response"""
-    return ChatResponse(
-        response="I'm having trouble processing your request right now. Please try again later.",
-        suggestions=["Try a simpler question", "Check system status", "Contact support"],
-        context=None,
-        session_id=session_id
+def _format_search_results(results: List[Dict]) -> str:
+    """Format search results for LLM context"""
+    return "\n".join(
+        f"{i}. {res.get('ItemDesc', res.get('item_desc', 'Item'))} | "
+        f"Vendor: {res.get('Vendor', res.get('vendor', 'N/A'))} | "
+        f"Spend: ${float(res.get('TotalSpend', res.get('total_spend', 0))):,.2f}"
+        for i, res in enumerate(results[:5], 1)
     )
+
+def _analyze_csv_data(csv_data: CSVData) -> str:
+    """Analyze uploaded CSV data for LLM context"""
+    analysis = []
+    analysis.append(f"File: {csv_data.filename}")
+    analysis.append(f"Rows: {csv_data.row_count}")
+    analysis.append(f"Columns: {', '.join(csv_data.headers)}")
+    
+    # Calculate total spend if available
+    spend_keys = [k for k in csv_data.headers if 'spend' in k.lower()]
+    if spend_keys:
+        total = sum(float(row.get(spend_keys[0], 0)) for row in csv_data.data)
+        analysis.append(f"Total spend: ${total:,.2f}")
+    
+    # Get unique vendors if available
+    vendor_keys = [k for k in csv_data.headers if 'vendor' in k.lower()]
+    if vendor_keys:
+        vendors = list(set(row.get(vendor_keys[0], '') for row in csv_data.data))
+        analysis.append(f"Vendors: {', '.join(v for v in vendors if v)}")
+    
+    return "Uploaded Data Analysis:\n" + "\n".join(analysis)
+
+async def _get_search_results(query: str) -> List[Dict]:
+    """Get hybrid search results combining vector search from AI Search and full-text search"""
+    try:
+        logger.info(f"Getting search results for query: '{query}'")
+        
+        # Get vector results using the updated embedding service (which now uses AI Search)
+        vector_results = query_similar_embeddings(query, top_k=5)
+        
+        # Get AI Search full-text results
+        ai_search = get_ai_search_service()
+        ai_results = ai_search.search(query, top=5)
+        
+        # Combine and deduplicate
+        combined = []
+        seen_ids = set()
+        
+        # Process vector results
+        for r in vector_results:
+            doc_id = r["metadata"].get("TransactionID")
+            if doc_id and doc_id not in seen_ids:
+                result_data = r["metadata"].copy()
+                result_data["similarity"] = r["similarity"]
+                result_data["source"] = "vector"
+                combined.append(result_data)
+                seen_ids.add(doc_id)
+        
+        # Process AI Search results
+        for r in ai_results:
+            doc_id = r.get("TransactionID")
+            if doc_id and doc_id not in seen_ids:
+                result_data = r.copy()
+                result_data["source"] = "ai_search"
+                result_data["similarity"] = 0.7  # Default similarity for full-text
+                combined.append(result_data)
+                seen_ids.add(doc_id)
+        
+        logger.info(f"Combined search returned {len(combined)} results")
+        return combined
+        
+    except Exception as e:
+        logger.error(f"Search failed: {str(e)}")
+        return []
 
 @router.post(
     "/chat",
     response_model=ChatResponse,
-    summary="Handle chat queries with CSV, Cosmos, and SQL fallback",
+    summary="Handle chat queries with data analysis",
     tags=["chat"]
 )
 async def chat_endpoint(
     request: ChatRequest,
     db: Session = Depends(get_db)
 ) -> ChatResponse:
-    """
-    Main chat endpoint:
-    1. Uses uploaded CSV data if present
-    2. Falls back to Cosmos DB SQL query
-    3. Falls back to relational DB via Transaction.search_relevant
-    """
-    logger.info(f"Received chat message: {request.message!r}")
+    logger.info(f"Chat request from session {request.session_id}")
+    
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty")
 
-    context: str = ""
+    # =================================================================
+    # 1. System State Detection
+    # =================================================================
+    ai_search = get_ai_search_service()
+    has_any_data = (
+        ai_search.get_document_count() > 0 
+        or (request.csv_data and request.csv_data.row_count > 0)
+    )
+
+    # =================================================================
+    # 2. Empty State Handling
+    # =================================================================
+    if not has_any_data:
+        return await _handle_empty_state(request)
+
+    # =================================================================
+    # 3. Data-Aware Processing
+    # =================================================================
+    context_parts = []
+    sources = []
+    
     try:
-        # Priority 1: CSV path
+        # 3A. Get search results (if available)
+        search_results = await _get_search_results(request.message)
+        if search_results:
+            context_parts.append(_format_search_results(search_results))
+            sources.extend([{"source": r.get("source", "database"), **r} for r in search_results])
+
+        # 3B. Process CSV data (if provided)
         if request.csv_data and request.csv_data.row_count > 0:
-            logger.info(f"Processing CSV: {request.csv_data.filename} ({request.csv_data.row_count} rows)")
-            context = _format_csv_for_ai(request.csv_data)
-        else:
-            # Priority 2: Try Cosmos
-            try:
-                container = get_cosmos_service()
-                sql = f"""
-                SELECT * FROM c
-                WHERE CONTAINS(LOWER(c.item_desc), "{request.message.lower()}")
-                   OR CONTAINS(LOWER(c.vendor),      "{request.message.lower()}")
-                   OR CONTAINS(LOWER(c.manufacturer),"{request.message.lower()}")
-                """
-                items = list(container.query_items(sql, enable_cross_partition_query=True))
-                if items:
-                    lines = [
-                        f"- {i.get('vendor','N/A')} | {i.get('item_desc','N/A')} | {i.get('load_date','N/A')} | ${i.get('unit_cost','N/A')}"
-                        for i in items[:5]
-                    ]
-                    context = "Recent Cosmos DB items:\n" + "\n".join(lines)
-                else:
-                    raise ValueError("No Cosmos matches")
-            except Exception as cosmos_err:
-                logger.warning(f"Cosmos error or no data: {cosmos_err}")
-                # SQL fallback with its own guard
-                try:
-                    relevant = Transaction.search_relevant(db, request.message, limit=5)
-                    if relevant:
-                        context = (
-                            "Recent transaction data from database:\n" +
-                            "\n".join(
-                                f"- {tx.Vendor} ({tx.FacilityType}, {tx.Region})" for tx in relevant
-                            )
-                        )
-                except Exception as sql_err:
-                    logger.warning(f"SQL fallback error: {sql_err}")
-                    # both failed, context stays empty
+            csv_context = _analyze_csv_data(request.csv_data)
+            context_parts.append(csv_context)
+            sources.append({
+                "source": "uploaded_csv",
+                "filename": request.csv_data.filename,
+                "rows": request.csv_data.row_count
+            })
 
-        # Build AI prompt
+        # =================================================================
+        # 4. Response Generation
+        # =================================================================
+        if not context_parts:  # Data exists but no matches found
+            return ChatResponse(
+                response=_generate_no_matches_response(request.message),
+                suggestions=_generate_suggestions(request.message),
+                session_id=request.session_id,
+                sources=None
+            )
+
+        # Build the LLM prompt for data-aware responses
         system_prompt = (
-            "You are Earl, an AI assistant specializing in supply chain management and procurement data analysis.\n"
-            "Reference specific data from context when possible. Be friendly yet professional."
+            "You are Earl, an AI assistant specializing in supply chain management. "
+            "Use ONLY the following context to answer. If unsure, say so. "
+            "When referencing numbers or facts, always cite the source data."
         )
-        prompt = f"{system_prompt}\n\nContext:\n{context}\n\nUser Question: {request.message}"
-        ai_response = LlamaService.query(prompt, max_tokens=400)
+        
+        context_joined = '\n\n'.join(context_parts)
+        prompt = f"{system_prompt}\n\nContext:\n{context_joined}\n\nQuestion: {request.message}"
 
-        # Generate suggestions
-        suggestions = _generate_suggestions(request.message, has_csv=bool(request.csv_data))[:3]
+        ai_response = LlamaService.query(prompt, max_tokens=settings.DEFAULT_MAX_TOKENS)
 
         return ChatResponse(
             response=ai_response,
-            suggestions=suggestions,
-            context=context or None,
-            session_id=request.session_id
+            suggestions=_generate_suggestions(request.message),
+            context=context_joined if len(context_parts) > 1 else None,
+            session_id=request.session_id,
+            sources=sources if sources else None
         )
+
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"Chat endpoint error: {exc}", exc_info=True)
-        return _create_error_response(str(exc), request.session_id)
+        logger.error(f"Chat error: {str(exc)}", exc_info=True)
+        return ChatResponse(
+            response="I'm having trouble processing your request. Please try again later.",
+            suggestions=["Try rephrasing your question", "Check your data format"],
+            session_id=request.session_id
+        )
+
+# =================================================================
+# Helper Functions
+# =================================================================
+async def _handle_empty_state(request: ChatRequest) -> ChatResponse:
+    """Generate intelligent responses when no data exists"""
+    # Craft a detailed prompt for the LLM
+    prompt = f"""
+    ROLE: You are Earl, a supply chain AI assistant.
+    
+    USER QUESTION: "{request.message}"
+    
+    CURRENT SYSTEM STATE:
+    - No data available (SQL database empty, no files uploaded)
+    - User may need guidance on data requirements
+    
+    RESPONSE REQUIREMENTS:
+    1. If question is data-specific:
+       - Explain what data would be needed
+       - Provide example columns/format
+    2. If general question:
+       - Answer normally
+    3. Always include:
+       - Clear next steps
+       - 3 relevant suggestions
+    
+    EXAMPLES:
+    User: "Show top vendors"
+    Response: "To analyze vendors, you'll need a file with Vendor and TotalSpend columns..."
+    """
+    
+    llm_response = LlamaService.query(prompt)
+    
+    # Standardize suggestions
+    suggestions = [
+        "How to upload data",
+        "Example file format",
+        "What analyses are available"
+    ]
+    
+    return ChatResponse(
+        response=llm_response,
+        suggestions=suggestions,
+        session_id=request.session_id,
+        sources=None
+    )
+
+def _generate_no_matches_response(query: str) -> str:
+    """When data exists but doesn't match the query"""
+    return (
+        f"I couldn't find data matching '{query}'. Try:\n"
+        "- Different search terms\n"
+        "- Checking your file's column names\n"
+        "- Asking about general trends"
+    )
+
+def _generate_suggestions(query: str) -> List[str]:
+    """Context-aware follow-up questions"""
+    query_lower = query.lower()
+    
+    # Data-specific suggestions
+    if any(term in query_lower for term in ["vendor", "supplier"]):
+        return [
+            "Compare vendor performance",
+            "Find alternative vendors",
+            "Analyze vendor spend trends"
+        ]
+    elif any(term in query_lower for term in ["spend", "cost"]):
+        return [
+            "Show monthly spending",
+            "Compare department budgets",
+            "Identify cost savings"
+        ]
+    
+    # Default suggestions
+    return [
+        "Upload a data file",
+        "What analyses can you run?",
+        "Show sample data format"
+    ]
+
+
+@router.get("/data/{batch_id}", response_model=List[Dict[str, Any]])
+async def get_batch_data(
+    batch_id: str,
+    offset: int = 0,
+    limit: int = 100
+):
+    """Endpoint to fetch batch data for frontend preview"""
+    try:
+        sql_service = get_sql_service()
+        records = sql_service.get_records_by_batch(batch_id, offset, limit)
+        return records
+    except Exception as e:
+        logger.error(f"Failed to fetch batch {batch_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/chat/health")
+async def chat_health():
+    """Health check for chat service and its dependencies"""
+    try:
+        # Test SQL connection
+        sql_service = get_sql_service()
+        sql_test = sql_service.test_connection()
+        
+        # Test AI Search connection
+        ai_search = get_ai_search_service()
+        ai_search_test = ai_search.test_connection()
+        
+        # Test embedding service
+        from app.services.embedding_service import test_embedding_service
+        embedding_test = test_embedding_service()
+        
+        return {
+            "status": "healthy",
+            "sql_connection": sql_test["status"] == "connected",
+            "ai_search_connection": ai_search_test["status"] == "connected",
+            "embedding_service": embedding_test,
+            "llama_service": "available"  # Assume available if no errors
+        }
+        
+    except Exception as e:
+        logger.error(f"Chat health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }

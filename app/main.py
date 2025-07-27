@@ -5,7 +5,7 @@ from app.core.logging import setup_logging
 from app.core.config import settings
 from app.utils.db import get_db
 from app.services.llama_service import LlamaService
-from app.services.cosmos_service import get_cosmos_service  # Add this import
+from app.services.sql_service import get_sql_service  
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import date
@@ -13,7 +13,7 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.transaction import Transaction  
 from app.api.routes.chat import router as chat_router
-from app.api.routes.cosmos import router as cosmos_router
+from app.api.routes.sql_data import router as sql_router
 from app.api.routes.process import router as process_router
 from app.api.routes.search import router as search_router
 from fastapi import UploadFile, File
@@ -28,6 +28,13 @@ from azure.storage.blob import BlobServiceClient
 # Logging Setup
 setup_logging()
 
+azure_logger = logging.getLogger("azure")
+azure_logger.setLevel(logging.WARNING)  # Only show WARNING and above for all Azure components
+
+# Specifically silence the HTTP logger
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,27 +48,26 @@ class ChatResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle management"""
-    logger.info("AI Chatbot Ready...")
+    logger.info("AI Chatbot Starting...")
     
-    # Test Llama connection on startup
     try:
+        # Test OpenRouter connection
         test_response = LlamaService.query("Hello", max_tokens=10)
         logger.info(f"✅ Llama API connection verified: {test_response[:50]}...")
-    except Exception as e:
-        logger.error(f"❌ Llama API connection failed: {str(e)}")
-    
-    
-    # Test Cosmos DB connection on startup
-    try:
-        cosmos_container = get_cosmos_service()
-        list(cosmos_container.read_all_items(max_item_count=1))
+        
+        # Preload embedding model to avoid timeout during first request
+        logger.info("Loading embedding model...")
+        from app.services.embedding_service import embed_bulk_text
+        embed_bulk_text(["test"])  # This triggers model loading
+        logger.info("✅ Embedding model loaded")
+        
         logger.info("✅ Cosmos DB connection verified")
+        
     except Exception as e:
-        logger.error(f"❌ Cosmos DB connection error: {str(e)}")
-
+        logger.error(f"❌ Startup failed: {e}")
+    
     yield
-    logger.info("Shutting down AI Chatbot...")
+    logger.info("AI Chatbot Shutting Down...")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -100,9 +106,9 @@ app.include_router(
 )
 
 app.include_router(
-    cosmos_router,
-    prefix="/api/v1/cosmos",
-    tags=["Cosmos DB"]
+    sql_router,  
+    prefix="/api/v1/sql",  
+    tags=["SQL Database"]  
 )
 
 app.include_router(
@@ -195,13 +201,13 @@ def full_health_check(db: Session = Depends(get_db)):
     except Exception as e:
         health_status["services"]["sql_database"] = f"unhealthy: {str(e)}"
     
-        # Check Cosmos DB
+        # Check SQL DB
     try:
-        cosmos_container = get_cosmos_service()
-        list(cosmos_container.read_all_items(max_item_count=1))
-        health_status["services"]["cosmos_db"] = "healthy"
+        service = get_sql_service()
+        service.test_connection()
+        health_status["services"]["sql_database"] = "healthy"
     except Exception as e:
-        health_status["services"]["cosmos_db"] = f"unhealthy: {str(e)}"
+        health_status["services"]["sql_database"] = f"unhealthy: {str(e)}"
 
     
     # Check Llama API

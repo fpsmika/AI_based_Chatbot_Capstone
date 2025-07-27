@@ -1,161 +1,256 @@
+# app/core/logging.py
 import logging
+import logging.config
 import sys
-from datetime import datetime
-from typing import Any, Dict
-import json
-from pathlib import Path
+from typing import Dict, Any
+from app.core.config import settings
 
-from .config import settings
-
-class JSONFormatter(logging.Formatter):
-    """Custom JSON formatter for structured logging"""
+def setup_logging() -> None:
+    """
+    Configure logging for the application
+    """
+    # Determine log level
+    log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
     
-    def format(self, record: logging.LogRecord) -> str:
-        log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-            "module": record.module,
-            "function": record.funcName,
-            "line": record.lineno,
+    # Determine which formatter to use based on LOG_FORMAT setting
+    if settings.LOG_FORMAT.lower() == "json":
+        default_formatter = "json"
+    else:
+        default_formatter = "default"
+    
+    # Logging configuration
+    logging_config: Dict[str, Any] = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+            "detailed": {
+                "format": "[%(asctime)s] %(levelname)-8s %(name)-20s %(funcName)-15s:%(lineno)-4d %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+            "json": {
+                "format": '{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}',
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            }
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "level": log_level,
+                "formatter": default_formatter,  # Use the determined formatter
+                "stream": sys.stdout,
+            },
+            "file": {
+                "class": "logging.handlers.RotatingFileHandler",
+                "level": log_level,
+                "formatter": "detailed",
+                "filename": "logs/app.log",
+                "maxBytes": 10485760,  # 10MB
+                "backupCount": 5,
+                "encoding": "utf8",
+            },
+            "error_file": {
+                "class": "logging.handlers.RotatingFileHandler",
+                "level": logging.ERROR,
+                "formatter": "detailed",
+                "filename": "logs/error.log",
+                "maxBytes": 10485760,  # 10MB
+                "backupCount": 5,
+                "encoding": "utf8",
+            }
+        },
+        "loggers": {
+            # Application loggers
+            "app": {
+                "level": log_level,
+                "handlers": ["console", "file"],
+                "propagate": False,
+            },
+            "app.services": {
+                "level": log_level,
+                "handlers": ["console", "file"],
+                "propagate": False,
+            },
+            "app.api": {
+                "level": log_level,
+                "handlers": ["console", "file"],
+                "propagate": False,
+            },
+            
+            # Third-party loggers
+            "azure": {
+                "level": logging.WARNING,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "azure.core.pipeline.policies.http_logging_policy": {
+                "level": logging.WARNING,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "sqlalchemy": {
+                "level": logging.WARNING,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "sqlalchemy.engine": {
+                "level": logging.WARNING if not settings.DEBUG else logging.INFO,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "sentence_transformers": {
+                "level": logging.WARNING,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "transformers": {
+                "level": logging.WARNING,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "httpx": {
+                "level": logging.WARNING,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "uvicorn": {
+                "level": logging.INFO,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "level": logging.WARNING,
+                "handlers": ["console"],
+                "propagate": False,
+            },
+            "fastapi": {
+                "level": logging.INFO,
+                "handlers": ["console"],
+                "propagate": False,
+            }
+        },
+        "root": {
+            "level": log_level,
+            "handlers": ["console", "error_file"],
         }
-        
-        # Add extra fields if they exist
-        if hasattr(record, 'request_id'):
-            log_entry["request_id"] = record.request_id
-        
-        if hasattr(record, 'user_id'):
-            log_entry["user_id"] = record.user_id
-        
-        if hasattr(record, 'execution_time'):
-            log_entry["execution_time"] = record.execution_time
-        
-        # Add exception info if present
-        if record.exc_info:
-            log_entry["exception"] = self.formatException(record.exc_info)
-        
-        return json.dumps(log_entry, ensure_ascii=False)
-
-class RequestLogger:
-    """Logger for HTTP requests"""
+    }
     
-    def __init__(self):
-        self.logger = logging.getLogger("requests")
-    
-    def log_request(self, method: str, url: str, status_code: int, 
-                   execution_time: float, request_id: str = None, 
-                   user_id: str = None):
-        """Log HTTP request details"""
-        extra = {
-            "request_id": request_id,
-            "user_id": user_id,
-            "execution_time": execution_time
-        }
-        
-        message = f"{method} {url} - {status_code} - {execution_time:.3f}s"
-        
-        if status_code >= 400:
-            self.logger.error(message, extra=extra)
-        else:
-            self.logger.info(message, extra=extra)
-
-class DatabaseLogger:
-    """Logger for database operations"""
-    
-    def __init__(self):
-        self.logger = logging.getLogger("database")
-    
-    def log_query(self, query: str, execution_time: float, 
-                 affected_rows: int = None, request_id: str = None):
-        """Log database query execution"""
-        extra = {
-            "request_id": request_id,
-            "execution_time": execution_time,
-            "affected_rows": affected_rows
-        }
-        
-        # Truncate long queries for logging
-        query_preview = query[:200] + "..." if len(query) > 200 else query
-        message = f"Query executed: {query_preview} - {execution_time:.3f}s"
-        
-        if affected_rows is not None:
-            message += f" - {affected_rows} rows affected"
-        
-        self.logger.info(message, extra=extra)
-    
-    def log_connection_error(self, error: Exception, request_id: str = None):
-        """Log database connection errors"""
-        extra = {"request_id": request_id}
-        self.logger.error(f"Database connection error: {str(error)}", 
-                         extra=extra, exc_info=True)
-
-def setup_logging():
-    """Configure application logging"""
+    # Apply configuration
+    logging.config.dictConfig(logging_config)
     
     # Create logs directory if it doesn't exist
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    import os
+    os.makedirs("logs", exist_ok=True)
     
-    # Get log level from settings
-    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(log_level)
-    
-    # Remove existing handlers
-    root_logger.handlers.clear()
-    
-    # Console handler with JSON formatter
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(log_level)
-    console_handler.setFormatter(JSONFormatter())
-    root_logger.addHandler(console_handler)
-    
-    # File handler for general logs
-    file_handler = logging.FileHandler(log_dir / "app.log", encoding="utf-8")
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(JSONFormatter())
-    root_logger.addHandler(file_handler)
-    
-    # Error file handler
-    error_handler = logging.FileHandler(log_dir / "error.log", encoding="utf-8")
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(JSONFormatter())
-    root_logger.addHandler(error_handler)
-    
-    # Configure specific loggers
-    
-    # Suppress uvicorn access logs in production
-    if not settings.DEBUG:
-        uvicorn_access = logging.getLogger("uvicorn.access")
-        uvicorn_access.setLevel(logging.WARNING)
-    
-    # Database logger
-    db_logger = logging.getLogger("database")
-    db_file_handler = logging.FileHandler(log_dir / "database.log", encoding="utf-8")
-    db_file_handler.setFormatter(JSONFormatter())
-    db_logger.addHandler(db_file_handler)
-    
-    # Request logger
-    request_logger = logging.getLogger("requests")
-    request_file_handler = logging.FileHandler(log_dir / "requests.log", encoding="utf-8")
-    request_file_handler.setFormatter(JSONFormatter())
-    request_logger.addHandler(request_file_handler)
-    
-    # AI service logger
-    ai_logger = logging.getLogger("ai_service")
-    ai_file_handler = logging.FileHandler(log_dir / "ai_service.log", encoding="utf-8")
-    ai_file_handler.setFormatter(JSONFormatter())
-    ai_logger.addHandler(ai_file_handler)
-    
-    logging.info(f"Logging configured - Level: {settings.log_level}")
+    # Log startup message
+    logger = logging.getLogger("app")
+    logger.info(f"Logging configured - Level: {settings.LOG_LEVEL}")
+    logger.info(f"Environment: {settings.DEBUG and 'DEBUG' or 'PRODUCTION'}")
 
-def get_logger(name: str) -> logging.Logger:
-    """Get logger instance"""
-    return logging.getLogger(name)
+class StructuredLogger:
+    """
+    Structured logging utility for consistent log formatting
+    """
+    
+    def __init__(self, name: str):
+        self.logger = logging.getLogger(name)
+    
+    def info(self, message: str, **kwargs):
+        """Log info with structured data"""
+        extra_data = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message}{' | ' + extra_data if extra_data else ''}"
+        self.logger.info(full_message)
+    
+    def error(self, message: str, **kwargs):
+        """Log error with structured data"""
+        extra_data = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message}{' | ' + extra_data if extra_data else ''}"
+        self.logger.error(full_message)
+    
+    def warning(self, message: str, **kwargs):
+        """Log warning with structured data"""
+        extra_data = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message}{' | ' + extra_data if extra_data else ''}"
+        self.logger.warning(full_message)
+    
+    def debug(self, message: str, **kwargs):
+        """Log debug with structured data"""
+        extra_data = " | ".join([f"{k}={v}" for k, v in kwargs.items()])
+        full_message = f"{message}{' | ' + extra_data if extra_data else ''}"
+        self.logger.debug(full_message)
 
-# Initialize specialized loggers
-request_logger = RequestLogger()
-db_logger = DatabaseLogger()
+def get_logger(name: str) -> StructuredLogger:
+    """Get a structured logger instance"""
+    return StructuredLogger(name)
+
+# Performance logging decorator
+import functools
+import time
+
+def log_performance(logger_name: str = None):
+    """Decorator to log function performance"""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            logger = logging.getLogger(logger_name or f"app.performance.{func.__module__}")
+            start_time = time.time()
+            
+            try:
+                result = func(*args, **kwargs)
+                execution_time = time.time() - start_time
+                logger.info(f"{func.__name__} completed in {execution_time:.3f}s")
+                return result
+            except Exception as e:
+                execution_time = time.time() - start_time
+                logger.error(f"{func.__name__} failed after {execution_time:.3f}s: {str(e)}")
+                raise
+        
+        return wrapper
+    return decorator
+
+# Request logging middleware helper
+def log_request(request_id: str, method: str, path: str, status_code: int = None, duration: float = None):
+    """Log HTTP request details"""
+    logger = logging.getLogger("app.api.requests")
+    
+    if status_code and duration:
+        logger.info(f"Request completed | id={request_id} | {method} {path} | status={status_code} | duration={duration:.3f}s")
+    else:
+        logger.info(f"Request started | id={request_id} | {method} {path}")
+
+# Database operation logging
+def log_db_operation(operation: str, table: str, count: int = None, duration: float = None):
+    """Log database operations"""
+    logger = logging.getLogger("app.database")
+    
+    extra_info = []
+    if count is not None:
+        extra_info.append(f"count={count}")
+    if duration is not None:
+        extra_info.append(f"duration={duration:.3f}s")
+    
+    extra_str = " | ".join(extra_info)
+    message = f"{operation} on {table}" + (f" | {extra_str}" if extra_str else "")
+    logger.info(message)
+
+# AI operation logging
+def log_ai_operation(operation: str, query: str = None, tokens: int = None, duration: float = None):
+    """Log AI/LLM operations"""
+    logger = logging.getLogger("app.ai")
+    
+    extra_info = []
+    if query:
+        # Truncate long queries
+        query_preview = query[:50] + "..." if len(query) > 50 else query
+        extra_info.append(f"query='{query_preview}'")
+    if tokens:
+        extra_info.append(f"tokens={tokens}")
+    if duration:
+        extra_info.append(f"duration={duration:.3f}s")
+    
+    extra_str = " | ".join(extra_info)
+    message = f"{operation}" + (f" | {extra_str}" if extra_str else "")
+    logger.info(message)

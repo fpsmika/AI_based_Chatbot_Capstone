@@ -1,22 +1,24 @@
 # For more information, please refer to https://aka.ms/vscode-docker-python
-FROM python:3.10-slim
+FROM python:3.10-slim-bullseye
 
 EXPOSE 8000
 
-# Install system dependencies for pyodbc
+# Install ONLY runtime dependencies (no build tools)
 RUN apt-get update && \
-    apt-get install -y g++ unixodbc-dev unixodbc && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+    unixodbc \  
+    && rm -rf /var/lib/apt/lists/*
 
-# Keeps Python from generating .pyc files in the container
-ENV PYTHONDONTWRITEBYTECODE=1
+# Python optimizations
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
-# Turns off buffering for easier container logging
-ENV PYTHONUNBUFFERED=1
+WORKDIR /app
 
-# Install pip requirements
+# Install dependencies first for layer caching
 COPY requirements.txt .
-RUN python -m pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 WORKDIR /app
 COPY . /app
@@ -27,4 +29,6 @@ RUN adduser -u 5678 --disabled-password --gecos "" appuser && chown -R appuser /
 USER appuser
 
 # During debugging, this entry point will be overridden. For more information, please refer to https://aka.ms/vscode-docker-python-debug
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "-k", "uvicorn.workers.UvicornWorker", "app.main:app"]
+
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "120", "-k", "uvicorn.workers.UvicornWorker", "app.main:app"]
