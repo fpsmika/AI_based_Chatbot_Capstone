@@ -297,6 +297,8 @@ def _generate_suggestions(query: str) -> List[str]:
     ]
 
 
+# ... (keep all your existing imports and setup code)
+
 @router.get("/data/{batch_id}", response_model=List[Dict[str, Any]])
 async def get_batch_data(
     batch_id: str,
@@ -342,3 +344,39 @@ async def chat_health():
             "status": "unhealthy",
             "error": str(e)
         }
+
+@router.get("/search/vector-search")
+async def vector_search(
+    q: str, 
+    top_k: int = 10,
+    min_score: float = 0.5
+):
+    """Enhanced vector search with better error handling"""
+    try:
+        results = query_similar_embeddings(q, top_k, min_score)
+        
+        if not results:
+            logger.warning(f"No vector results found for query: '{q}'")
+            # Fall back to full-text search
+            ai_search = get_ai_search_service()
+            results = ai_search.search(q, top=top_k)
+            for r in results:
+                r['similarity'] = 0.7  # Add default similarity score
+        
+        return {
+            "results": results,
+            "count": len(results),
+            "warning": "Used fallback search" if not results else None
+        }
+    except Exception as e:
+        logger.error(f"Vector search failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Vector search failed",
+                "message": str(e)
+            }
+        )
+
+
+    

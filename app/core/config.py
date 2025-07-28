@@ -41,8 +41,9 @@ class Settings(BaseSettings):
     AZURE_STORAGE_CONNECTION_STRING: str = ""
     BLOB_CONTAINER_NAME: str = "raw-upload"
     
-    # Azure AI Search (matching your .env)
+    # Azure AI Search (matching your .env) - FIXED: Added missing AZURE_SEARCH_ENDPOINT
     AZURE_SEARCH_SERVICE_NAME: str = ""
+    AZURE_SEARCH_ENDPOINT: str = ""  # <-- ADD THIS LINE
     AZURE_SEARCH_API_KEY: str = ""
     AZURE_SEARCH_INDEX_NAME: str = "chatbot-index-1"
     
@@ -107,6 +108,16 @@ class Settings(BaseSettings):
         """Alias for get_database_url to maintain backward compatibility"""
         return self.get_database_url
     
+    # ADDED: Property to construct Azure Search endpoint from service name if not provided
+    @property
+    def get_azure_search_endpoint(self) -> str:
+        """Get Azure Search endpoint, constructing from service name if needed"""
+        if self.AZURE_SEARCH_ENDPOINT:
+            return self.AZURE_SEARCH_ENDPOINT
+        elif self.AZURE_SEARCH_SERVICE_NAME:
+            return f"https://{self.AZURE_SEARCH_SERVICE_NAME}.search.windows.net"
+        return ""
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
@@ -121,7 +132,6 @@ class Settings(BaseSettings):
 # Create global settings instance
 settings = Settings()
 
-
 def validate_settings():
     """Validate critical configuration settings"""
     errors = []
@@ -130,8 +140,8 @@ def validate_settings():
     if not settings.database_url_complete:
         errors.append("Database configuration incomplete. Check SQL_* or DATABASE_URL environment variables.")
     
-    # Check Azure AI Search
-    if not all([settings.AZURE_SEARCH_SERVICE_NAME, settings.AZURE_SEARCH_API_KEY]):
+    # Check Azure AI Search - UPDATED to check for endpoint properly
+    if not all([settings.get_azure_search_endpoint, settings.AZURE_SEARCH_API_KEY]):
         errors.append("Azure AI Search configuration incomplete. Check AZURE_SEARCH_* environment variables.")
     
     # Check LLM configuration

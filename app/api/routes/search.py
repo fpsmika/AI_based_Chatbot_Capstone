@@ -33,46 +33,23 @@ class SearchResponse(BaseModel):
     total_count: int
     query_time_ms: float
 
-@router.get("/vector-search", response_model=List[SimilarResult], summary="Semantic vector search")
-async def vector_search(
-    q: str = Query(..., description="Natural language query"),
-    top_k: int = Query(15, ge=1, le=50),
-    min_score: float = Query(0.5, ge=0, le=1),
-    offset: int = Query(0, ge=0)
-):
-    """Search using vector embeddings via AI Search"""
-    start_time = datetime.now()
-    try:
-        logger.info(f"Vector search query: '{q}', top_k: {top_k}, min_score: {min_score}")
-        
-        # Use the updated embedding service which now uses AI Search
-        raw_results = query_similar_embeddings(q, top_k=(top_k + offset), min_score=min_score)
-        
-        if not raw_results:
-            logger.warning(f"No results found for query: '{q}'")
-            return []
-        
-        # Apply pagination
-        paginated_results = raw_results[offset:offset + top_k]
-        
-        # Format results
-        formatted_results = [
-            {
-                "metadata": r["metadata"], 
-                "similarity": r["similarity"],
-                "source": "ai_search_vector"
-            }
-            for r in paginated_results
-        ]
-        
-        query_time = (datetime.now() - start_time).total_seconds() * 1000
-        logger.info(f"Vector search completed in {query_time:.2f}ms with {len(formatted_results)} results")
-        return formatted_results
-        
-    except Exception as e:
-        logger.error(f"Vector search failed: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Vector search failed: {e}")
+from fastapi import APIRouter, HTTPException
+from app.services.embedding_service import query_similar_embeddings
 
+router = APIRouter()
+
+@router.get("/vector-search")
+async def vector_search(q: str, top_k: int = 10):
+    try:
+        results = query_similar_embeddings(q, top_k)
+        return {
+            "results": results,
+            "count": len(results)
+        }
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+    
+    
 @router.get("/ai-search", response_model=SearchResponse, summary="Full-text AI Search")
 async def ai_search(
     q: str = Query(..., description="Search query"),

@@ -130,18 +130,30 @@ async def _run_pipeline_and_write(
 async def _process_embeddings_to_ai_search(df: pd.DataFrame, embed_batch_size: int, filename: str, batch_id: str):
     """
     Process embeddings and upload documents with vectors to AI Search
+    Enhanced with comprehensive field mapping and better error handling
     """
-    # Convert DataFrame to chunks for embedding
+    # Convert DataFrame to chunks for embedding with improved parser
     chunks = csv_to_purchase_chunks(df)
     texts = [c["text"] for c in chunks]
     metadatas = [c["metadata"] for c in chunks]
     total = len(texts)
 
-    logger.info(f"Processing {total} embeddings in batches of {embed_batch_size}")
+    logger.info(f"Processing {total} embeddings in batches of {embed_batch_size} for {filename}")
+
+    # Validate chunk quality
+    from app.utils.supply_data_parser import validate_chunk_data
+    validation = validate_chunk_data(chunks)
+    logger.info(f"Chunk validation: {validation['message']}")
+    
+    if not validation['valid']:
+        logger.warning(f"Low quality chunks detected for {filename}, but proceeding...")
 
     ai_search = get_ai_search_service()
 
     # Process in batches
+    successful_batches = 0
+    total_uploaded = 0
+    
     for start in range(0, total, embed_batch_size):
         batch_texts = texts[start:start + embed_batch_size]
         batch_metas = metadatas[start:start + embed_batch_size]
@@ -152,40 +164,78 @@ async def _process_embeddings_to_ai_search(df: pd.DataFrame, embed_batch_size: i
             
             # Generate embeddings
             embeddings = embed_bulk_text(batch_texts)
+            logger.info(f"  Generated {len(embeddings)} embeddings")
             
-            # Prepare documents with vectors for AI Search
+            # Prepare comprehensive documents with vectors for AI Search
             documents = []
             for text, metadata, embedding in zip(batch_texts, batch_metas, embeddings):
-                # Create a comprehensive document for AI Search
+                # Create comprehensive document with all field mappings
                 doc = {
                     "id": str(uuid.uuid4()),
                     "content": text,
                     "content_vector": embedding,
                     "batch_id": batch_id,
-                    # Add metadata fields for better search
-                    "TransactionID": str(metadata.get("TransactionID", "")),
-                    "FacilityID": str(metadata.get("FacilityID", "")),
-                    "FacilityType": str(metadata.get("FacilityType", "")),
-                    "Region": str(metadata.get("Region", "")),
-                    "ItemDesc": str(metadata.get("ItemDesc", "")),
-                    "Vendor": str(metadata.get("Vendor", "")),
-                    "Manufacturer": str(metadata.get("Manufacturer", "")),
-                    "TotalSpend": float(metadata.get("TotalSpend", 0)),
-                    "PricePaid": float(metadata.get("PricePaid", 0)),
-                    "Quantity": int(metadata.get("Quantity", 0)),
-                    "Department": str(metadata.get("Department", "")),
-                    "Category": str(metadata.get("Category", "")),
-                    "metadata": json.dumps(metadata)
+                    
+                    # Comprehensive field mapping for search compatibility
+                    "TransactionID": str(metadata.get("transaction_id", metadata.get("TransactionID", ""))),
+                    "FacilityID": str(metadata.get("facility_id", metadata.get("FacilityID", ""))),
+                    "FacilityType": str(metadata.get("facility_type", metadata.get("FacilityType", "Unknown"))),
+                    "Region": str(metadata.get("region", metadata.get("Region", "Unknown"))),
+                    "ItemDesc": str(metadata.get("item_desc", metadata.get("ItemDesc", ""))),
+                    "Vendor": str(metadata.get("vendor", metadata.get("Vendor", "Unknown"))),
+                    "Manufacturer": str(metadata.get("manufacturer", metadata.get("Manufacturer", "Unknown"))),
+                    "Department": str(metadata.get("department", metadata.get("Department", "Unknown"))),
+                    "Category": str(metadata.get("category", metadata.get("Category", "Unknown"))),
+                    
+                    # Numeric fields with proper type conversion
+                    "TotalSpend": float(metadata.get("total_spend", metadata.get("TotalSpend", 0))),
+                    "PricePaid": float(metadata.get("price_paid", metadata.get("PricePaid", 0))),
+                    "Quantity": int(metadata.get("quantity", metadata.get("Quantity", 0))),
+                    "Month": int(metadata.get("month", metadata.get("Month", 0))) if metadata.get("month", metadata.get("Month")) else 0,
+                    "Year": int(metadata.get("year", metadata.get("Year", 0))) if metadata.get("year", metadata.get("Year")) else 0,
+                    
+                    # Additional searchable fields
+                    "VendorID": str(metadata.get("vendor_id", metadata.get("VendorID", ""))),
+                    "ManufacturerID": str(metadata.get("manufacturer_id", metadata.get("ManufacturerID", ""))),
+                    "LoadDate": metadata.get("load_date", metadata.get("LoadDate")),
+                    
+                    # Store rich metadata as JSON for reference
+                    "metadata": json.dumps(metadata, default=str)
                 }
                 documents.append(doc)
 
             # Upload to AI Search with vectors
+            logger.info(f"  Uploading {len(documents)} documents with vectors...")
             upload_result = ai_search.upload_documents(documents)
-            logger.info(f"  ✅ Batch {batch_no} completed: {upload_result['uploaded']} documents with vectors uploaded")
+            
+            if upload_result.get('uploaded', 0) > 0:
+                successful_batches += 1
+                total_uploaded += upload_result['uploaded']
+                logger.info(f"  ✅ Batch {batch_no} completed: {upload_result['uploaded']} documents with vectors uploaded")
+            else:
+                error_msg = upload_result.get('error', 'Unknown error')
+                logger.error(f"  ✖️ Batch {batch_no} failed: {error_msg}")
 
         except Exception as e:
             logger.error(f"  ✖️ Embedding batch {batch_no} failed for {filename}: {e}")
+            import traceback
+            logger.error(f"  Traceback: {traceback.format_exc()}")
             continue
+
+    # Final summary
+    success_rate = (successful_batches / ((total + embed_batch_size - 1) // embed_batch_size)) * 100 if total > 0 else 0
+    logger.info(f"Embedding processing completed for {filename}:")
+    logger.info(f"  - Total chunks: {total}")
+    logger.info(f"  - Successful batches: {successful_batches}")
+    logger.info(f"  - Total uploaded: {total_uploaded}")
+    logger.info(f"  - Success rate: {success_rate:.1f}%")
+    
+    return {
+        "total_chunks": total,
+        "successful_batches": successful_batches,
+        "total_uploaded": total_uploaded,
+        "success_rate": success_rate
+    }
 
 # SOLUTION 1: Create a synchronous wrapper function
 def run_pipeline_sync(temp_path: str, filename: str, batch_id: str, embed_batch_size: int = 500):

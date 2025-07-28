@@ -15,7 +15,7 @@ import hashlib
 logger = logging.getLogger(__name__)
 
 class SQLService:
-    """Enhanced Azure SQL Service with normalized schema support and improved error handling"""
+    """Fixed Azure SQL Service aligned with existing supply_records schema"""
     
     def __init__(self):
         # Enhanced connection string with proper timeout settings
@@ -53,7 +53,7 @@ class SQLService:
                 
                 # Initialize tables if needed
                 if not self._tables_initialized:
-                    self._ensure_tables_exist(connection)
+                    self._check_schema(connection)
                     self._tables_initialized = True
                 
                 yield connection
@@ -80,147 +80,36 @@ class SQLService:
                 except:
                     pass
     
-    def _ensure_tables_exist(self, connection):
-        """Create necessary tables if they don't exist - both normalized and denormalized"""
+    def _check_schema(self, connection):
+        """Check existing schema and log what we have"""
         cursor = connection.cursor()
         
         try:
-            # Create normalized schema tables (for your setup_azure_db.py)
-            normalized_schema = [
-                # Vendors table
-                """
-                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'vendors')
-                BEGIN
-                    CREATE TABLE vendors (
-                        VendorID NVARCHAR(50) PRIMARY KEY,
-                        VendorName NVARCHAR(200) NOT NULL,
-                        created_at DATETIME2 DEFAULT GETDATE()
-                    );
-                END
-                """,
-                
-                # Facilities table
-                """
-                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'facilities')
-                BEGIN
-                    CREATE TABLE facilities (
-                        FacilityID NVARCHAR(50) PRIMARY KEY,
-                        FacilityType NVARCHAR(100) NOT NULL,
-                        Region NVARCHAR(100) NOT NULL,
-                        BedSize NVARCHAR(50) NOT NULL,
-                        created_at DATETIME2 DEFAULT GETDATE()
-                    );
-                END
-                """,
-                
-                # Supplies table
-                """
-                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'supplies')
-                BEGIN
-                    CREATE TABLE supplies (
-                        SupplyID NVARCHAR(50) PRIMARY KEY,
-                        ManufacturerCatalogNum NVARCHAR(100),
-                        ItemDesc NVARCHAR(500) NOT NULL,
-                        ManufacturerID NVARCHAR(50) NOT NULL,
-                        created_at DATETIME2 DEFAULT GETDATE()
-                    );
-                END
-                """,
-                
-                # Transactions table (normalized)
-                """
-                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'transactions')
-                BEGIN
-                    CREATE TABLE transactions (
-                        TransactionID NVARCHAR(50) PRIMARY KEY,
-                        FacilityID NVARCHAR(50) NOT NULL,
-                        VendorID NVARCHAR(50) NOT NULL,
-                        SupplyID NVARCHAR(50) NOT NULL,
-                        Month INT NOT NULL CHECK (Month BETWEEN 1 AND 12),
-                        Year INT NOT NULL CHECK (Year >= 2000),
-                        LoadDate DATE NOT NULL,
-                        Quantity INT NOT NULL,
-                        PricePaid DECIMAL(18,2) NOT NULL,
-                        TotalSpend DECIMAL(18,2) NOT NULL,
-                        batch_id NVARCHAR(50),
-                        created_at DATETIME2 DEFAULT GETDATE()
-                    );
-                    
-                    -- Create indexes for better performance
-                    CREATE INDEX idx_transaction_facility ON transactions(FacilityID);
-                    CREATE INDEX idx_transaction_vendor ON transactions(VendorID);
-                    CREATE INDEX idx_transaction_batch ON transactions(batch_id);
-                END
-                """,
-                
-                # Denormalized supply_records table (for compatibility)
-                """
-                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'supply_records')
-                BEGIN
-                    CREATE TABLE supply_records (
-                        id NVARCHAR(50) PRIMARY KEY,
-                        batch_id NVARCHAR(50) NULL,
-                        TransactionID NVARCHAR(50) NULL,
-                        FacilityID NVARCHAR(50) NULL,
-                        FacilityType NVARCHAR(100) NULL,
-                        Region NVARCHAR(100) NULL,
-                        Department NVARCHAR(100) NULL,
-                        Vendor NVARCHAR(200) NULL,
-                        ItemDesc NVARCHAR(500) NULL,
-                        Manufacturer NVARCHAR(200) NULL,
-                        Category NVARCHAR(100) NULL,
-                        TotalSpend DECIMAL(18,2) NULL,
-                        PricePaid DECIMAL(18,2) NULL,
-                        Quantity INT NULL,
-                        LoadDate DATETIME2 NULL,
-                        Month INT NULL,
-                        Year INT NULL,
-                        BedSize NVARCHAR(50) NULL,
-                        ManufacturercatalogNum NVARCHAR(100) NULL,
-                        VendorID NVARCHAR(50) NULL,
-                        created_at DATETIME2 DEFAULT GETUTCDATE(),
-                        updated_at DATETIME2 DEFAULT GETUTCDATE()
-                    );
-                    
-                    CREATE INDEX IX_supply_records_batch_id ON supply_records(batch_id);
-                    CREATE INDEX IX_supply_records_vendor ON supply_records(Vendor);
-                    CREATE INDEX IX_supply_records_facility ON supply_records(FacilityID);
-                    CREATE INDEX IX_supply_records_transaction ON supply_records(TransactionID);
-                END
-                """,
-                
-                # Embeddings table
-                """
-                IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'embeddings')
-                BEGIN
-                    CREATE TABLE embeddings (
-                        id NVARCHAR(50) PRIMARY KEY,
-                        vector NVARCHAR(MAX) NULL,
-                        metadata NVARCHAR(MAX) NULL,
-                        created_at DATETIME2 DEFAULT GETUTCDATE(),
-                        updated_at DATETIME2 DEFAULT GETUTCDATE()
-                    );
-                END
-                """
-            ]
+            # Check what tables exist
+            cursor.execute("""
+                SELECT TABLE_NAME 
+                FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_TYPE = 'BASE TABLE'
+                ORDER BY TABLE_NAME
+            """)
+            tables = [row[0] for row in cursor.fetchall()]
+            logger.info(f"Existing tables: {tables}")
             
-            # Execute schema creation
-            for i, cmd in enumerate(normalized_schema, 1):
-                try:
-                    logger.debug(f"Executing schema command {i}/{len(normalized_schema)}")
-                    cursor.execute(cmd)
-                    connection.commit()
-                except Exception as e:
-                    logger.warning(f"Schema command {i} failed: {e}")
-                    connection.rollback()
-                    continue
-            
-            logger.info("✅ Database schema verified/created successfully")
+            # Check supply_records columns specifically
+            if 'supply_records' in tables:
+                cursor.execute("""
+                    SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_NAME = 'supply_records'
+                    ORDER BY ORDINAL_POSITION
+                """)
+                columns = cursor.fetchall()
+                logger.info("supply_records table columns:")
+                for col in columns:
+                    logger.info(f"  - {col[0]} ({col[1]}, nullable: {col[2]})")
             
         except Exception as e:
-            logger.error(f"Failed to create schema: {e}")
-            connection.rollback()
-            raise
+            logger.error(f"Failed to check schema: {e}")
         finally:
             cursor.close()
     
@@ -258,7 +147,7 @@ class SQLService:
             return {"status": "error", "error": str(e)}
     
     def bulk_upsert_records(self, records: List[Dict[str, Any]], batch_id: str) -> int:
-        """Enhanced bulk upsert supporting both normalized and denormalized approaches"""
+        """Bulk upsert using ONLY the existing supply_records table schema"""
         if not records:
             return 0
             
@@ -267,21 +156,36 @@ class SQLService:
                 cursor = conn.cursor()
                 successful_upserts = 0
                 
-                # Check if we have normalized tables
-                cursor.execute("""
-                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES 
-                    WHERE TABLE_NAME IN ('vendors', 'facilities', 'supplies', 'transactions')
-                """)
-                normalized_tables_count = cursor.fetchone()[0]
+                logger.info(f"Starting bulk upsert of {len(records)} records to supply_records table")
                 
-                if normalized_tables_count == 4:
-                    # Use normalized approach
-                    logger.info("Using normalized schema for bulk upsert")
-                    successful_upserts = self._bulk_upsert_normalized(cursor, records, batch_id)
-                else:
-                    # Use denormalized approach
-                    logger.info("Using denormalized schema for bulk upsert")
-                    successful_upserts = self._bulk_upsert_denormalized(cursor, records, batch_id)
+                # Debug: Check first few records to understand data structure
+                if len(records) > 0:
+                    sample_record = records[0]
+                    logger.info(f"Sample record keys: {list(sample_record.keys())}")
+                    logger.info(f"Sample Month value: {sample_record.get('Month')} (type: {type(sample_record.get('Month'))})")
+                    logger.info(f"Sample LoadDate value: {sample_record.get('LoadDate')} (type: {type(sample_record.get('LoadDate'))})")
+                
+                for i, record in enumerate(records):
+                    try:
+                        # Normalize the record to match existing schema
+                        normalized_record = self._normalize_record_for_supply_table(record, batch_id)
+                        
+                        # Debug: Log first few normalized records
+                        if i < 3:
+                            logger.info(f"Normalized record {i+1}: Month={normalized_record['Month']}, Year={normalized_record['Year']}, LoadDate={normalized_record['LoadDate']}")
+                        
+                        self._upsert_supply_record_safe(cursor, normalized_record)
+                        successful_upserts += 1
+                        
+                        if successful_upserts % 1000 == 0:
+                            logger.info(f"Processed {successful_upserts}/{len(records)} records")
+                            
+                    except Exception as record_error:
+                        logger.warning(f"Failed to upsert record {i+1}: {record_error}")
+                        # Log the problematic record for debugging
+                        if i < 10:  # Only log first 10 failures to avoid spam
+                            logger.debug(f"Problematic record data: {record}")
+                        continue
                 
                 conn.commit()
                 cursor.close()
@@ -292,153 +196,176 @@ class SQLService:
             logger.error(f"Bulk upsert failed: {e}")
             raise
     
-    def _bulk_upsert_normalized(self, cursor, records: List[Dict[str, Any]], batch_id: str) -> int:
-        """Bulk upsert for normalized schema"""
-        successful_upserts = 0
+    def _normalize_record_for_supply_table(self, record: Dict[str, Any], batch_id: str) -> Dict[str, Any]:
+        """Normalize record to match the existing supply_records table schema exactly"""
+        # Extract date components for Month/Year if missing
+        load_date = self._safe_date(record.get('LoadDate'))
+        current_date = datetime.now()
         
-        # Extract unique values for reference tables
-        vendors = {}
-        facilities = {}
-        supplies = {}
+        # Try to extract month/year from LoadDate if not provided
+        month_value = self._safe_int(record.get('Month'))
+        year_value = self._safe_int(record.get('Year'))
         
-        for record in records:
-            # Generate VendorID if missing
-            vendor_name = record.get('Vendor', '')
-            if vendor_name:
-                vendor_id = self._generate_id('V', vendor_name)
-                vendors[vendor_id] = vendor_name
-                record['VendorID'] = vendor_id
-            
-            # Generate FacilityID if missing in record
-            facility_id = record.get('FacilityID', '')
-            if facility_id:
-                facilities[facility_id] = {
-                    'FacilityType': record.get('FacilityType', ''),
-                    'Region': record.get('Region', ''),
-                    'BedSize': record.get('BedSize', '')
-                }
-            
-            # Generate SupplyID from ManufacturerCatalogNum
-            catalog_num = record.get('ManufacturercatalogNum', record.get('ManufacturerCatalogNum', ''))
-            if catalog_num:
-                supply_id = f"SUP-{catalog_num}"
-                supplies[supply_id] = {
-                    'ManufacturerCatalogNum': catalog_num,
-                    'ItemDesc': record.get('ItemDesc', ''),
-                    'ManufacturerID': record.get('Manufacturer', 'UNKNOWN')
-                }
-                record['SupplyID'] = supply_id
-        
-        try:
-            # Upsert vendors
-            for vendor_id, vendor_name in vendors.items():
-                cursor.execute("""
-                    MERGE vendors AS target
-                    USING (VALUES (?, ?)) AS source (VendorID, VendorName)
-                    ON target.VendorID = source.VendorID
-                    WHEN NOT MATCHED THEN
-                        INSERT (VendorID, VendorName) VALUES (source.VendorID, source.VendorName);
-                """, (vendor_id, vendor_name))
-            
-            # Upsert facilities
-            for facility_id, facility_data in facilities.items():
-                cursor.execute("""
-                    MERGE facilities AS target
-                    USING (VALUES (?, ?, ?, ?)) AS source (FacilityID, FacilityType, Region, BedSize)
-                    ON target.FacilityID = source.FacilityID
-                    WHEN NOT MATCHED THEN
-                        INSERT (FacilityID, FacilityType, Region, BedSize)
-                        VALUES (source.FacilityID, source.FacilityType, source.Region, source.BedSize);
-                """, (facility_id, facility_data['FacilityType'], facility_data['Region'], facility_data['BedSize']))
-            
-            # Upsert supplies
-            for supply_id, supply_data in supplies.items():
-                cursor.execute("""
-                    MERGE supplies AS target
-                    USING (VALUES (?, ?, ?, ?)) AS source (SupplyID, ManufacturerCatalogNum, ItemDesc, ManufacturerID)
-                    ON target.SupplyID = source.SupplyID
-                    WHEN NOT MATCHED THEN
-                        INSERT (SupplyID, ManufacturerCatalogNum, ItemDesc, ManufacturerID)
-                        VALUES (source.SupplyID, source.ManufacturerCatalogNum, source.ItemDesc, source.ManufacturerID);
-                """, (supply_id, supply_data['ManufacturerCatalogNum'], supply_data['ItemDesc'], supply_data['ManufacturerID']))
-            
-            # Upsert transactions
-            for record in records:
-                try:
-                    normalized_record = self._normalize_record(record)
-                    cursor.execute("""
-                        MERGE transactions AS target
-                        USING (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)) AS source 
-                            (TransactionID, FacilityID, VendorID, SupplyID, Month, Year, LoadDate, Quantity, PricePaid, TotalSpend, batch_id)
-                        ON target.TransactionID = source.TransactionID
-                        WHEN MATCHED THEN
-                            UPDATE SET 
-                                FacilityID = source.FacilityID,
-                                VendorID = source.VendorID,
-                                SupplyID = source.SupplyID,
-                                Month = source.Month,
-                                Year = source.Year,
-                                LoadDate = source.LoadDate,
-                                Quantity = source.Quantity,
-                                PricePaid = source.PricePaid,
-                                TotalSpend = source.TotalSpend,
-                                batch_id = source.batch_id
-                        WHEN NOT MATCHED THEN
-                            INSERT (TransactionID, FacilityID, VendorID, SupplyID, Month, Year, LoadDate, Quantity, PricePaid, TotalSpend, batch_id)
-                            VALUES (source.TransactionID, source.FacilityID, source.VendorID, source.SupplyID, 
-                                   source.Month, source.Year, source.LoadDate, source.Quantity, source.PricePaid, source.TotalSpend, source.batch_id);
-                    """, (
-                        normalized_record.get('TransactionID', ''),
-                        normalized_record.get('FacilityID', ''),
-                        normalized_record.get('VendorID', ''),
-                        normalized_record.get('SupplyID', ''),
-                        int(normalized_record.get('Month', 0)) if normalized_record.get('Month') else None,
-                        int(normalized_record.get('Year', 0)) if normalized_record.get('Year') else None,
-                        normalized_record.get('LoadDate'),
-                        int(normalized_record.get('Quantity', 0)) if normalized_record.get('Quantity') else None,
-                        float(normalized_record.get('PricePaid', 0)) if normalized_record.get('PricePaid') else None,
-                        float(normalized_record.get('TotalSpend', 0)) if normalized_record.get('TotalSpend') else None,
-                        batch_id
-                    ))
-                    successful_upserts += 1
-                except Exception as record_error:
-                    logger.warning(f"Failed to upsert transaction record: {record_error}")
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"Normalized upsert failed: {e}")
-            raise
-        
-        return successful_upserts
-    
-    def _bulk_upsert_denormalized(self, cursor, records: List[Dict[str, Any]], batch_id: str) -> int:
-        """Bulk upsert for denormalized supply_records table"""
-        successful_upserts = 0
-        
-        for record in records:
+        if not month_value or not year_value:
             try:
-                # Normalize the record
-                normalized_record = self._normalize_record(record)
-                normalized_record.setdefault('id', str(uuid4()))
-                normalized_record['batch_id'] = batch_id
-                
-                # Generate VendorID if missing
-                if 'VendorID' not in normalized_record and 'Vendor' in normalized_record:
-                    normalized_record['VendorID'] = self._generate_id('V', normalized_record['Vendor'])
-                
-                self._upsert_supply_record(cursor, normalized_record)
-                successful_upserts += 1
-                
-            except Exception as record_error:
-                logger.warning(f"Failed to upsert supply record: {record_error}")
-                continue
+                if load_date:
+                    date_obj = pd.to_datetime(load_date)
+                    if not month_value:
+                        month_value = date_obj.month
+                    if not year_value:
+                        year_value = date_obj.year
+                else:
+                    # Fallback to current date
+                    if not month_value:
+                        month_value = current_date.month
+                    if not year_value:
+                        year_value = current_date.year
+            except:
+                # Ultimate fallback
+                if not month_value:
+                    month_value = current_date.month
+                if not year_value:
+                    year_value = current_date.year
+
+        # Based on your schema, these columns are NOT NULL and need default values
+        normalized = {
+            'id': record.get('id', str(uuid4())),
+            'batch_id': batch_id,
+            'TransactionID': record.get('TransactionID') or f"TXN-{str(uuid4())[:8]}",
+            'FacilityID': record.get('FacilityID') or 'UNKNOWN',
+            'FacilityType': record.get('FacilityType') or 'Unknown',
+            'Region': record.get('Region') or 'Unknown',
+            'BedSize': record.get('BedSize') or 'Unknown',
+            'Month': month_value,
+            'Year': year_value,
+            'LoadDate': load_date or current_date.date().isoformat(),
+            'Vendor': record.get('Vendor') or 'Unknown Vendor',
+            'VendorID': record.get('VendorID') or self._generate_vendor_id(record.get('Vendor', 'Unknown')),
+            'Manufacturer': record.get('Manufacturer') or 'Unknown Manufacturer',
+            'ManufacturerID': record.get('ManufacturerID') or 'UNKNOWN',
+            'ManufacturercatalogNum': record.get('ManufacturercatalogNum', record.get('ManufacturerCatalogNum', 'UNKNOWN')),
+            'ItemDesc': record.get('ItemDesc') or 'Unknown Item',
+            'Quantity': self._safe_int(record.get('Quantity')) or 0,
+            'PricePaid': self._safe_decimal(record.get('PricePaid')) or 0.0,
+            'TotalSpend': self._safe_decimal(record.get('TotalSpend')) or 0.0,
+            'Department': record.get('Department'),  # NULL allowed
+            'Category': record.get('Category')       # NULL allowed
+        }
         
-        return successful_upserts
+        return normalized
     
-    def _generate_id(self, prefix: str, value: str) -> str:
-        """Generate a consistent ID based on a string value"""
-        hash_value = hashlib.md5(str(value).encode()).hexdigest()[:8]
-        return f"{prefix}-{hash_value.upper()}"
+    def _safe_int(self, value) -> int:
+        """Safely convert to int or return 0 for required fields"""
+        if value is None or pd.isna(value):
+            return 0
+        try:
+            if isinstance(value, str) and value.strip() == '':
+                return 0
+            return int(float(value))  # Handle float strings
+        except (ValueError, TypeError):
+            return 0
+    
+    def _safe_decimal(self, value) -> float:
+        """Safely convert to decimal or return 0.0 for required fields"""
+        if value is None or pd.isna(value):
+            return 0.0
+        try:
+            if isinstance(value, str) and value.strip() == '':
+                return 0.0
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
+    
+    def _safe_date(self, value) -> Optional[str]:
+        """Safely convert to date string or return None"""
+        if value is None or pd.isna(value):
+            return None
+        try:
+            if isinstance(value, str) and value.strip() == '':
+                return None
+            if isinstance(value, (datetime, date, pd.Timestamp)):
+                return pd.to_datetime(value).date().isoformat()
+            elif isinstance(value, str):
+                return pd.to_datetime(value).date().isoformat()
+            return None
+        except:
+            return None
+    
+    def _generate_vendor_id(self, vendor_name: str) -> str:
+        """Generate a vendor ID from vendor name"""
+        if not vendor_name or vendor_name.strip() == '':
+            return 'V-UNKNOWN'
+        return f"V-{hashlib.md5(vendor_name.encode()).hexdigest()[:8].upper()}"
+    
+    def _upsert_supply_record_safe(self, cursor, record: Dict[str, Any]) -> bool:
+        """Safe upsert for supply records using exact column names from your schema"""
+        try:
+            cursor.execute("""
+                MERGE supply_records AS target
+                USING (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)) AS source 
+                    (id, batch_id, TransactionID, FacilityID, FacilityType, Region, BedSize,
+                     Month, Year, LoadDate, Vendor, VendorID, Manufacturer, ManufacturerID,
+                     ManufacturercatalogNum, ItemDesc, Quantity, PricePaid, TotalSpend, Department)
+                ON target.id = source.id OR (target.TransactionID = source.TransactionID AND target.TransactionID != '')
+                WHEN MATCHED THEN
+                    UPDATE SET 
+                        batch_id = source.batch_id,
+                        TransactionID = source.TransactionID,
+                        FacilityID = source.FacilityID,
+                        FacilityType = source.FacilityType,
+                        Region = source.Region,
+                        BedSize = source.BedSize,
+                        Month = source.Month,
+                        Year = source.Year,
+                        LoadDate = source.LoadDate,
+                        Vendor = source.Vendor,
+                        VendorID = source.VendorID,
+                        Manufacturer = source.Manufacturer,
+                        ManufacturerID = source.ManufacturerID,
+                        ManufacturercatalogNum = source.ManufacturercatalogNum,
+                        ItemDesc = source.ItemDesc,
+                        Quantity = source.Quantity,
+                        PricePaid = source.PricePaid,
+                        TotalSpend = source.TotalSpend,
+                        Department = source.Department,
+                        updated_at = GETUTCDATE()
+                WHEN NOT MATCHED THEN
+                    INSERT (id, batch_id, TransactionID, FacilityID, FacilityType, Region, BedSize,
+                            Month, Year, LoadDate, Vendor, VendorID, Manufacturer, ManufacturerID,
+                            ManufacturercatalogNum, ItemDesc, Quantity, PricePaid, TotalSpend, Department,
+                            created_at, updated_at)
+                    VALUES (source.id, source.batch_id, source.TransactionID, source.FacilityID,
+                           source.FacilityType, source.Region, source.BedSize, source.Month, source.Year,
+                           source.LoadDate, source.Vendor, source.VendorID, source.Manufacturer,
+                           source.ManufacturerID, source.ManufacturercatalogNum, source.ItemDesc,
+                           source.Quantity, source.PricePaid, source.TotalSpend, source.Department,
+                           GETUTCDATE(), GETUTCDATE());
+            """, (
+                record['id'],
+                record['batch_id'],
+                record['TransactionID'],
+                record['FacilityID'],
+                record['FacilityType'],
+                record['Region'],
+                record['BedSize'],
+                record['Month'],
+                record['Year'],
+                record['LoadDate'],
+                record['Vendor'],
+                record['VendorID'],
+                record['Manufacturer'],
+                record['ManufacturerID'],
+                record['ManufacturercatalogNum'],
+                record['ItemDesc'],
+                record['Quantity'],
+                record['PricePaid'],
+                record['TotalSpend'],
+                record['Department']
+            ))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to upsert supply record: {e}")
+            raise
     
     def upsert_item(self, record: Dict[str, Any], table_name: str = "supply_records") -> bool:
         """Insert or update a single record"""
@@ -446,16 +373,13 @@ class SQLService:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Prepare record data
-                record = self._normalize_record(record)
-                record.setdefault('id', str(uuid4()))
-                
                 if table_name == "supply_records":
-                    success = self._upsert_supply_record(cursor, record)
-                elif table_name == "embeddings":
-                    success = self._upsert_embedding(cursor, record)
+                    # Generate batch_id for single records
+                    batch_id = record.get('batch_id', str(uuid4()))
+                    normalized_record = self._normalize_record_for_supply_table(record, batch_id)
+                    success = self._upsert_supply_record_safe(cursor, normalized_record)
                 else:
-                    raise ValueError(f"Unknown table: {table_name}")
+                    raise ValueError(f"Table {table_name} not supported in this simplified version")
                 
                 conn.commit()
                 cursor.close()
@@ -486,81 +410,19 @@ class SQLService:
             logger.error(f"Query failed: {e}")
             raise
     
-    def vector_search(self, query_vector: List[float], top_k: int = 5, min_score: float = 0.5) -> List[Dict]:
-        """Simplified vector search (can be enhanced later with proper vector search)"""
-        try:
-            # For now, return empty results - this can be enhanced with proper vector search
-            logger.info("Vector search requested but not fully implemented yet")
-            return []
-                
-        except Exception as e:
-            logger.error(f"Vector search failed: {e}")
-            return []
-    
-    def store_embeddings_bulk(self, embeddings: List[Dict[str, Any]]) -> int:
-        """Bulk store embeddings with metadata"""
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                successful_stores = 0
-                for emb in embeddings:
-                    try:
-                        cursor.execute("""
-                            MERGE embeddings AS target
-                            USING (VALUES (?, ?, ?, ?)) AS source (id, vector, metadata, created_at)
-                            ON target.id = source.id
-                            WHEN MATCHED THEN
-                                UPDATE SET 
-                                    vector = source.vector,
-                                    metadata = source.metadata,
-                                    updated_at = GETUTCDATE()
-                            WHEN NOT MATCHED THEN
-                                INSERT (id, vector, metadata, created_at, updated_at)
-                                VALUES (source.id, source.vector, source.metadata, source.created_at, source.created_at);
-                        """, (
-                            emb["id"],
-                            json.dumps(emb["vector"]),
-                            json.dumps(emb["metadata"]),
-                            datetime.utcnow().isoformat()
-                        ))
-                        successful_stores += 1
-                    except Exception as emb_error:
-                        logger.warning(f"Failed to store embedding: {emb_error}")
-                        continue
-                
-                conn.commit()
-                cursor.close()
-                return successful_stores
-                
-        except Exception as e:
-            logger.error(f"Failed to store embeddings: {e}")
-            raise
-    
     def get_records_by_batch(self, batch_id: str, offset: int = 0, limit: int = 100) -> List[Dict]:
-        """Get paginated records by batch ID"""
+        """Get paginated records by batch ID from supply_records table"""
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Try supply_records first, then transactions
-                try:
-                    cursor.execute("""
-                        SELECT * FROM supply_records
-                        WHERE batch_id = ?
-                        ORDER BY created_at DESC
-                        OFFSET ? ROWS
-                        FETCH NEXT ? ROWS ONLY
-                    """, (batch_id, offset, limit))
-                except:
-                    # Fallback to transactions table
-                    cursor.execute("""
-                        SELECT * FROM transactions
-                        WHERE batch_id = ?
-                        ORDER BY created_at DESC
-                        OFFSET ? ROWS
-                        FETCH NEXT ? ROWS ONLY
-                    """, (batch_id, offset, limit))
+                cursor.execute("""
+                    SELECT * FROM supply_records
+                    WHERE batch_id = ?
+                    ORDER BY created_at DESC
+                    OFFSET ? ROWS
+                    FETCH NEXT ? ROWS ONLY
+                """, (batch_id, offset, limit))
                 
                 columns = [column[0] for column in cursor.description]
                 results = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -571,7 +433,6 @@ class SQLService:
             logger.error(f"Failed to get records by batch: {e}")
             raise
     
-    # Helper methods
     def _normalize_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Convert special types to SQL-compatible formats"""
         normalized = record.copy()
@@ -590,95 +451,6 @@ class SQLService:
                 # Truncate very long strings to fit database constraints
                 normalized[key] = value[:500]
         return normalized
-    
-    def _upsert_supply_record(self, cursor, record: Dict[str, Any]) -> bool:
-        """Specialized upsert for supply records with proper column names"""
-        try:
-            cursor.execute("""
-                MERGE supply_records AS target
-                USING (VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)) AS source 
-                    (id, batch_id, TransactionID, FacilityID, FacilityType, Region, 
-                     Department, Vendor, ItemDesc, Manufacturer, Category, 
-                     TotalSpend, PricePaid, Quantity, LoadDate, Month, Year, BedSize, VendorID)
-                ON target.TransactionID = source.TransactionID OR target.id = source.id
-                WHEN MATCHED THEN
-                    UPDATE SET 
-                        batch_id = source.batch_id,
-                        FacilityID = source.FacilityID,
-                        FacilityType = source.FacilityType,
-                        Region = source.Region,
-                        Department = source.Department,
-                        Vendor = source.Vendor,
-                        ItemDesc = source.ItemDesc,
-                        Manufacturer = source.Manufacturer,
-                        Category = source.Category,
-                        TotalSpend = source.TotalSpend,
-                        PricePaid = source.PricePaid,
-                        Quantity = source.Quantity,
-                        LoadDate = source.LoadDate,
-                        Month = source.Month,
-                        Year = source.Year,
-                        BedSize = source.BedSize,
-                        VendorID = source.VendorID,
-                        updated_at = GETUTCDATE()
-                WHEN NOT MATCHED THEN
-                    INSERT (id, batch_id, TransactionID, FacilityID, FacilityType, Region,
-                            Department, Vendor, ItemDesc, Manufacturer, Category,
-                            TotalSpend, PricePaid, Quantity, LoadDate, Month, Year, BedSize, VendorID,
-                            created_at, updated_at)
-                    VALUES (source.id, source.batch_id, source.TransactionID, source.FacilityID,
-                           source.FacilityType, source.Region, source.Department, source.Vendor,
-                           source.ItemDesc, source.Manufacturer, source.Category,
-                           source.TotalSpend, source.PricePaid, source.Quantity,
-                           source.LoadDate, source.Month, source.Year, source.BedSize, source.VendorID,
-                           GETUTCDATE(), GETUTCDATE());
-            """, (
-                record.get('id', str(uuid4())),
-                record.get('batch_id', ''),
-                record.get('TransactionID', ''),
-                record.get('FacilityID', ''),
-                record.get('FacilityType', ''),
-                record.get('Region', ''),
-                record.get('Department', ''),
-                record.get('Vendor', ''),
-                record.get('ItemDesc', ''),
-                record.get('Manufacturer', ''),
-                record.get('Category', ''),
-                float(record.get('TotalSpend', 0)) if record.get('TotalSpend') is not None else None,
-                float(record.get('PricePaid', 0)) if record.get('PricePaid') is not None else None,
-                int(record.get('Quantity', 0)) if record.get('Quantity') is not None else None,
-                record.get('LoadDate'),
-                int(record.get('Month', 0)) if record.get('Month') is not None else None,
-                int(record.get('Year', 0)) if record.get('Year') is not None else None,
-                record.get('BedSize', ''),
-                record.get('VendorID', '')
-            ))
-            return True
-        except Exception as e:
-            logger.error(f"Failed to upsert supply record: {e}")
-            raise
-    
-    def _upsert_embedding(self, cursor, embedding: Dict[str, Any]) -> bool:
-        """Specialized upsert for embeddings"""
-        cursor.execute("""
-            MERGE embeddings AS target
-            USING (VALUES (?, ?, ?, ?)) AS source (id, vector, metadata, created_at)
-            ON target.id = source.id
-            WHEN MATCHED THEN
-                UPDATE SET 
-                    vector = source.vector,
-                    metadata = source.metadata,
-                    updated_at = GETUTCDATE()
-            WHEN NOT MATCHED THEN
-                INSERT (id, vector, metadata, created_at, updated_at)
-                VALUES (source.id, source.vector, source.metadata, source.created_at, source.created_at);
-        """, (
-            embedding['id'],
-            json.dumps(embedding.get('vector', [])),
-            json.dumps(embedding.get('metadata', {})),
-            datetime.utcnow().isoformat()
-        ))
-        return True
 
 # Singleton instance for dependency injection
 sql_service = SQLService()

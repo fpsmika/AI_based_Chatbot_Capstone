@@ -232,7 +232,7 @@ const MedMineChatbot = () => {
           {
             id: Date.now(),
             type: 'system',
-            content: `✅ ${verb} batch ${batch_id}: ${rows_loaded} rows.`,
+            content: `✅ ${verb} batch ${batch_id}: ${rows_loaded} rows. Data is now searchable!`,
             timestamp: new Date()
           }
         ];
@@ -241,15 +241,30 @@ const MedMineChatbot = () => {
       setCurrentBatch(batch_id);
       setTotalRows(rows_loaded);
 
-      // 3) Fetch first page of data (may be empty initially—poll or let user refresh)
-      const pageRes = await fetch(
-        `${API_BASE}/cosmos/data/${batch_id}?offset=0&limit=100`
-      );
-      if (!pageRes.ok) throw new Error(`Paging fetch failed: ${pageRes.statusText}`);
-      const pageData: any[] = await pageRes.json();
-
-      setFileData(pageData);
-      setShowFilePreview(true);
+      // 3) REMOVED: Don't try to fetch cosmos data since we don't have that endpoint
+      // Instead, create a simple file preview from the original file if it's CSV
+      if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
+        try {
+          const text = await file.text();
+          // Detect delimiter - tab for your sample data
+          const delimiter = text.includes('\t') ? '\t' : ',';
+          const lines = text.split('\n').slice(0, 4);
+          const headers = lines[0]?.split(delimiter) || [];
+          const rows = lines.slice(1).map(line => {
+            const values = line.split(delimiter);
+            const row: Record<string, string> = {};
+            headers.forEach((header, index) => {
+              row[header?.trim() || `col${index}`] = values[index]?.trim() || '';
+            });
+            return row;
+          }).filter(row => Object.values(row).some(v => v));
+          
+          setFileData(rows);
+          setShowFilePreview(true);
+        } catch (previewError) {
+          console.warn('Could not create file preview:', previewError);
+        }
+      }
 
     } catch (err) {
       console.error(err);
@@ -272,59 +287,90 @@ const MedMineChatbot = () => {
   };
 
   // New vector search functionality
+    interface NormalizedSearchResult {
+    id: string;
+    TransactionID: string;
+    ItemDesc: string;
+    Vendor: string;
+    TotalSpend: number;
+    similarity: number;
+    [key: string]: any; // Allow additional dynamic properties
+  }
+
   const handleVectorSearch = async (query: string) => {
     try {
+      // 1. Make the API request
       const response = await fetch(
         `${API_BASE}/search/vector-search?q=${encodeURIComponent(query)}&top_k=10`
       );
       
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) {
+        throw new Error(`Search failed with status ${response.status}`);
+      }
       
-      const results: SearchResult[] = await response.json();
-      setSearchResults(results);
+      // 2. Process and normalize the results
+      const rawResults = await response.json();
+      
+      const normalizedResults: NormalizedSearchResult[] = rawResults.map((result: any) => {
+        // Extract from either root level or metadata object
+        const metadata = result.metadata || {};
+        return {
+          id: result.id,
+          TransactionID: result.TransactionID || result.transaction_id || metadata.TransactionID || '',
+          ItemDesc: result.ItemDesc || result.item_desc || metadata.ItemDesc || '',
+          Vendor: result.Vendor || result.vendor || metadata.Vendor || '',
+          TotalSpend: result.TotalSpend || result.total_spend || metadata.TotalSpend || 0,
+          similarity: result.similarity || result["@search.score"] || 0,
+          // Include all original fields
+          ...result
+        };
+      });
+
+      // 3. Update state with normalized results
+      setSearchResults(normalizedResults);
       setShowSearchResults(true);
       
-      setMessages(m => [
-        ...m,
+      // 4. Add system message with sources
+      setMessages(prev => [
+        ...prev,
         {
           id: Date.now(),
-          type: 'system',
-          content: `Found ${results.length} relevant items matching "${query}"`,
+          type: 'system' as const,
+          content: `Found ${normalizedResults.length} items matching "${query}"`,
           timestamp: new Date(),
-          sources: results.map(r => ({
+          sources: normalizedResults.slice(0, 3).map((r: NormalizedSearchResult) => ({
             source: 'azure_search',
             ItemDesc: r.ItemDesc,
             Vendor: r.Vendor,
             TotalSpend: r.TotalSpend,
-            similarity: r.similarity || r["@search.score"]
+            similarity: r.similarity
           }))
         }
       ]);
       
     } catch (err) {
-      console.error("Search error:", err);
-      setMessages(m => [
-        ...m,
+      console.error("Vector search error:", err);
+      
+      // 5. Error handling with user-friendly message
+      const errorMessage = err instanceof Error ? err.message : 'Unknown search error';
+      
+      setMessages(prev => [
+        ...prev,
         {
           id: Date.now(),
-          type: 'system',
-          content: `Search failed: ${err instanceof Error ? err.message : String(err)}`,
+          type: 'system' as const,
+          content: `Search failed: ${errorMessage}`,
           timestamp: new Date()
         }
       ]);
+      
+      // Optional: Clear previous results on error
+      setSearchResults([]);
+      setShowSearchResults(false);
     }
   };
 
-  async function fetchBatchData(batchId: string, offset = 0, limit = 100) {
-    const res = await fetch(
-      `${API_BASE}/cosmos/data/${batchId}?offset=${offset}&limit=${limit}`
-    );
-    if (!res.ok) {
-      console.error("Fetch error:", res.statusText);
-      return [];
-    }
-    return (await res.json()) as any[];
-  }
+  
 
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
@@ -956,19 +1002,6 @@ const MedMineChatbot = () => {
                 {showFilePreview ? 'Hide' : 'Show'} Preview
               </button>
               
-              {uploadedFile && currentBatch && (
-                <button
-                  onClick={async () => {
-                    const data = await fetchBatchData(currentBatch);
-                    console.log("🔄 refreshed data:", data);
-                    setFileData(data);
-                    setShowFilePreview(true);
-                  }}
-                  style={styles.refreshButton}
-                >
-                  Refresh Data from Cosmos
-                </button>
-              )}
             </div>
           )}
         </div>

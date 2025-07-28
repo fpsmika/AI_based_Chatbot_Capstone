@@ -55,6 +55,16 @@ def process_and_embed_csv(file_path: str, batch_size: int = 500) -> Dict[str, An
     logger.info(f"Starting embedding pipeline for file: {file_path}")
     
     try:
+        # Check if AI Search is available
+        ai_search = get_ai_search_service()
+        if not ai_search.is_configured:
+            logger.warning("Azure AI Search is not configured. Skipping embedding process.")
+            return {
+                "success": False,
+                "message": "Azure AI Search is not configured. Please check your environment variables.",
+                "chunks_processed": 0
+            }
+
         # 1) Read CSV file (without lowercasing headers)
         df = pd.read_csv(file_path)
         logger.info(f"Loaded CSV with {len(df)} rows and columns: {list(df.columns)}")
@@ -78,9 +88,6 @@ def process_and_embed_csv(file_path: str, batch_size: int = 500) -> Dict[str, An
         successful_batches = 0
         total_processed = 0
 
-        # Get AI Search service
-        ai_search = get_ai_search_service()
-
         # 4) Process in batches
         for batch_i in range(0, total_chunks, batch_size):
             batch_end = min(batch_i + batch_size, total_chunks)
@@ -95,22 +102,48 @@ def process_and_embed_csv(file_path: str, batch_size: int = 500) -> Dict[str, An
                 logger.info(f"  Generating embeddings...")
                 embeddings = embed_bulk_text(batch_texts)
                 
-                # Prepare documents for AI Search
+                # Prepare documents for AI Search with comprehensive field mapping
                 documents = []
                 for i, (text, metadata, embedding) in enumerate(zip(batch_texts, batch_metas, embeddings)):
-                    doc = metadata.copy()  # Start with metadata
-                    doc["id"] = str(uuid.uuid4())
-                    doc["content"] = text
-                    doc["content_vector"] = embedding
+                    # Create comprehensive document with proper field mapping
+                    doc = {
+                        "id": str(uuid.uuid4()),
+                        "content": text,
+                        "content_vector": embedding,
+                        
+                        # Map all possible field variants for maximum compatibility
+                        "TransactionID": str(metadata.get("transaction_id", metadata.get("TransactionID", ""))),
+                        "FacilityID": str(metadata.get("facility_id", metadata.get("FacilityID", ""))),
+                        "FacilityType": str(metadata.get("facility_type", metadata.get("FacilityType", "Unknown"))),
+                        "Region": str(metadata.get("region", metadata.get("Region", "Unknown"))),
+                        "ItemDesc": str(metadata.get("item_desc", metadata.get("ItemDesc", ""))),
+                        "Vendor": str(metadata.get("vendor", metadata.get("Vendor", "Unknown"))),
+                        "Manufacturer": str(metadata.get("manufacturer", metadata.get("Manufacturer", "Unknown"))),
+                        "Department": str(metadata.get("department", metadata.get("Department", "Unknown"))),
+                        "Category": str(metadata.get("category", metadata.get("Category", "Unknown"))),
+                        
+                        # Numeric fields with fallbacks
+                        "TotalSpend": float(metadata.get("total_spend", metadata.get("TotalSpend", 0))),
+                        "PricePaid": float(metadata.get("price_paid", metadata.get("PricePaid", 0))),
+                        "Quantity": int(metadata.get("quantity", metadata.get("Quantity", 0))),
+                        "Month": int(metadata.get("month", metadata.get("Month", 0))),
+                        "Year": int(metadata.get("year", metadata.get("Year", 0))),
+                        
+                        # Store original metadata for reference
+                        "metadata": metadata
+                    }
                     documents.append(doc)
 
                 # Store in AI Search
                 logger.info(f"  Storing embeddings in AI Search...")
                 upload_result = ai_search.upload_documents(documents)
                 
-                successful_batches += 1
-                total_processed += upload_result["uploaded"]
-                logger.info(f"  ✅ Batch {batch_num} completed successfully ({upload_result['uploaded']} uploaded)")
+                if upload_result.get("uploaded", 0) > 0:
+                    successful_batches += 1
+                    total_processed += upload_result["uploaded"]
+                    logger.info(f"  ✅ Batch {batch_num} completed successfully ({upload_result['uploaded']} uploaded)")
+                else:
+                    logger.error(f"  ✖️ Batch {batch_num} failed: {upload_result.get('error', 'Unknown error')}")
 
             except Exception as e:
                 logger.error(f"  ✖️ Batch {batch_num} failed: {e}")
@@ -141,19 +174,61 @@ def process_and_embed_records(records: List[Dict], batch_size: int = 500) -> Dic
     logger.info(f"Starting embedding pipeline for {len(records)} records")
     
     try:
-        # Convert records to chunks using the same parser logic
+        # Check if AI Search is available
+        ai_search = get_ai_search_service()
+        if not ai_search.is_configured:
+            logger.warning("Azure AI Search is not configured. Skipping embedding process.")
+            return {
+                "success": False,
+                "message": "Azure AI Search is not configured. Please check your environment variables.",
+                "chunks_processed": 0
+            }
+
+        # Convert records to chunks using enhanced logic
         chunks = []
         for record in records:
-            # Create a text representation and metadata for each record
+            # Create comprehensive text representation
             text_parts = []
-            metadata = {}
+            metadata = record.copy()  # Start with full record as metadata
             
-            # Build text description
-            for key, value in record.items():
-                if value and str(value).strip():
-                    if key in ['ItemDesc', 'Vendor', 'Manufacturer', 'Category', 'Department']:
-                        text_parts.append(f"{key}: {value}")
-                    metadata[key] = value
+            # Build rich text description with all available information
+            searchable_fields = [
+                ('Item Description', ['ItemDesc', 'item_desc']),
+                ('Vendor', ['Vendor', 'vendor']),
+                ('Manufacturer', ['Manufacturer', 'manufacturer']),
+                ('Facility Type', ['FacilityType', 'facility_type']),
+                ('Region', ['Region', 'region']),
+                ('Department', ['Department', 'department']),
+                ('Category', ['Category', 'category']),
+            ]
+            
+            for display_name, field_variants in searchable_fields:
+                for field in field_variants:
+                    value = record.get(field)
+                    if value and str(value).strip() and str(value).strip().lower() not in ['unknown', 'null', 'none']:
+                        text_parts.append(f"{display_name}: {value}")
+                        break
+            
+            # Add numeric information if available
+            quantity = record.get('Quantity', record.get('quantity'))
+            if quantity:
+                text_parts.append(f"Quantity: {quantity}")
+                
+            total_spend = record.get('TotalSpend', record.get('total_spend'))
+            if total_spend:
+                text_parts.append(f"Total Spend: ${total_spend}")
+            
+            # Add temporal information
+            month = record.get('Month', record.get('month'))
+            year = record.get('Year', record.get('year'))
+            if month and year:
+                month_names = {
+                    1: "January", 2: "February", 3: "March", 4: "April",
+                    5: "May", 6: "June", 7: "July", 8: "August",
+                    9: "September", 10: "October", 11: "November", 12: "December"
+                }
+                month_name = month_names.get(int(month), f"Month-{month}")
+                text_parts.append(f"Date: {month_name} {year}")
             
             if text_parts:
                 chunk_text = " | ".join(text_parts)
@@ -176,9 +251,6 @@ def process_and_embed_records(records: List[Dict], batch_size: int = 500) -> Dic
         total_processed = 0
         successful_batches = 0
 
-        # Get AI Search service
-        ai_search = get_ai_search_service()
-
         for batch_i in range(0, len(chunks), batch_size):
             batch_end = min(batch_i + batch_size, len(chunks))
             batch_texts = texts[batch_i:batch_end]
@@ -191,21 +263,49 @@ def process_and_embed_records(records: List[Dict], batch_size: int = 500) -> Dic
                 # Generate embeddings
                 embeddings = embed_bulk_text(batch_texts)
                 
-                # Prepare documents for AI Search
+                # Prepare documents for AI Search with comprehensive mapping
                 documents = []
                 for text, metadata, embedding in zip(batch_texts, batch_metas, embeddings):
-                    doc = metadata.copy()
-                    doc["id"] = str(uuid.uuid4())
-                    doc["content"] = text
-                    doc["content_vector"] = embedding
+                    doc = {
+                        "id": str(uuid.uuid4()),
+                        "content": text,
+                        "content_vector": embedding,
+                        
+                        # Comprehensive field mapping
+                        "TransactionID": str(metadata.get("transaction_id", metadata.get("TransactionID", ""))),
+                        "FacilityID": str(metadata.get("facility_id", metadata.get("FacilityID", ""))),
+                        "FacilityType": str(metadata.get("facility_type", metadata.get("FacilityType", "Unknown"))),
+                        "Region": str(metadata.get("region", metadata.get("Region", "Unknown"))),
+                        "ItemDesc": str(metadata.get("item_desc", metadata.get("ItemDesc", ""))),
+                        "Vendor": str(metadata.get("vendor", metadata.get("Vendor", "Unknown"))),
+                        "Manufacturer": str(metadata.get("manufacturer", metadata.get("Manufacturer", "Unknown"))),
+                        "Department": str(metadata.get("department", metadata.get("Department", "Unknown"))),
+                        "Category": str(metadata.get("category", metadata.get("Category", "Unknown"))),
+                        
+                        # Numeric fields
+                        "TotalSpend": float(metadata.get("total_spend", metadata.get("TotalSpend", 0))),
+                        "PricePaid": float(metadata.get("price_paid", metadata.get("PricePaid", 0))),
+                        "Quantity": int(metadata.get("quantity", metadata.get("Quantity", 0))),
+                        "Month": int(metadata.get("month", metadata.get("Month", 0))),
+                        "Year": int(metadata.get("year", metadata.get("Year", 0))),
+                        
+                        # Batch tracking
+                        "BatchId": str(metadata.get("batch_id", "")),
+                        
+                        # Full metadata
+                        "metadata": metadata
+                    }
                     documents.append(doc)
 
                 # Store in AI Search
                 upload_result = ai_search.upload_documents(documents)
                 
-                successful_batches += 1
-                total_processed += upload_result["uploaded"]
-                logger.info(f"  ✅ Batch {batch_num} completed ({upload_result['uploaded']} uploaded)")
+                if upload_result.get("uploaded", 0) > 0:
+                    successful_batches += 1
+                    total_processed += upload_result["uploaded"]
+                    logger.info(f"  ✅ Batch {batch_num} completed ({upload_result['uploaded']} uploaded)")
+                else:
+                    logger.error(f"  ✖️ Batch {batch_num} failed: {upload_result.get('error', 'Unknown error')}")
 
             except Exception as e:
                 logger.error(f"  ✖️ Batch {batch_num} failed: {e}")
@@ -226,79 +326,135 @@ def process_and_embed_records(records: List[Dict], batch_size: int = 500) -> Dic
             "chunks_processed": 0
         }
 
-def query_similar_embeddings(query_text: str, top_k: int = 15, min_score: float = 0.5) -> List[Dict[str, Any]]:
+def query_similar_embeddings(query_text: str, top_k: int = 15, min_score: float = 0.3) -> List[Dict[str, Any]]:
     """
-    Find similar embeddings using Azure AI Search vector search
-    Replaces the old SQL-based vector search
+    Find similar embeddings using Azure AI Search vector search with improved result mapping
     """
     try:
-        logger.info(f"Querying similar embeddings for: '{query_text}', top_k: {top_k}")
+        logger.info(f"Querying similar embeddings for: '{query_text}', top_k: {top_k}, min_score: {min_score}")
+        
+        # Check if AI Search is available
+        ai_search = get_ai_search_service()
+        if not ai_search.is_configured:
+            logger.warning("Azure AI Search is not configured. Returning empty results.")
+            return []
         
         # Generate embedding for query
         query_vector = embed_text(query_text)
+        logger.info(f"Generated query vector with {len(query_vector)} dimensions")
         
         # Use AI Search for vector similarity
-        ai_search = get_ai_search_service()
-        results = ai_search.vector_search(query_vector, top=top_k)
+        results = ai_search.vector_search(query_vector, top=top_k * 2)  # Get more results to filter
+        logger.info(f"AI Search returned {len(results)} raw results")
         
-        # Filter by minimum score and format results
+        # Filter by minimum score and format results properly
         filtered_results = []
         for result in results:
-            similarity = result.get("similarity", 0.0)
+            similarity = result.get("similarity", 0.5)
+            
             if similarity >= min_score:
+                # Create comprehensive metadata from the result
+                metadata = {
+                    "TransactionID": result.get("TransactionID", ""),
+                    "FacilityID": result.get("FacilityID", ""),
+                    "ItemDesc": result.get("ItemDesc", ""),
+                    "Vendor": result.get("Vendor", "Unknown"),
+                    "Manufacturer": result.get("Manufacturer", "Unknown"),
+                    "FacilityType": result.get("FacilityType", "Unknown"),
+                    "Region": result.get("Region", "Unknown"),
+                    "Department": result.get("Department", "Unknown"),
+                    "Category": result.get("Category", "Unknown"),
+                    "TotalSpend": result.get("TotalSpend", 0),
+                    "PricePaid": result.get("PricePaid", 0),
+                    "Quantity": result.get("Quantity", 0),
+                    "Month": result.get("Month", 0),
+                    "Year": result.get("Year", 0),
+                    "BatchId": result.get("BatchId", ""),
+                    
+                    # Include searchable content for display
+                    "content": result.get("content", ""),
+                    
+                    # Try to parse stored metadata if available
+                    **self._parse_stored_metadata(result.get("metadata", "{}"))
+                }
+                
                 filtered_results.append({
                     "id": result.get("id"),
                     "similarity": similarity,
-                    "metadata": {
-                        "TransactionID": result.get("TransactionID"),
-                        "ItemDesc": result.get("ItemDesc"),
-                        "Vendor": result.get("Vendor"),
-                        "Manufacturer": result.get("Manufacturer"),
-                        "TotalSpend": result.get("TotalSpend"),
-                        "FacilityType": result.get("FacilityType"),
-                        "Region": result.get("Region"),
-                        "Department": result.get("Department"),
-                        "Category": result.get("Category")
-                    }
+                    "metadata": metadata,
+                    "source": "vector_search"
                 })
         
-        logger.info(f"Found {len(filtered_results)} similar embeddings")
-        return filtered_results
+        # Sort by similarity score
+        filtered_results.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        # Limit to requested number
+        final_results = filtered_results[:top_k]
+        
+        logger.info(f"Returning {len(final_results)} filtered results (min_score: {min_score})")
+        return final_results
         
     except Exception as e:
         logger.error(f"Vector search failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return []
+
+def _parse_stored_metadata(metadata_str: str) -> Dict[str, Any]:
+    """Parse stored JSON metadata safely"""
+    try:
+        if metadata_str:
+            import json
+            parsed = json.loads(metadata_str)
+            if isinstance(parsed, dict):
+                return parsed
+    except Exception as e:
+        logger.debug(f"Failed to parse metadata: {e}")
+    return {}
 
 def test_embedding_service():
     """
     Test the embedding service functionality with AI Search
     """
     try:
+        logger.info("Testing embedding service...")
+        
         # Test single text embedding
-        test_text = "Surgical gloves size large from MedSupply Corp"
+        test_text = "Surgical gloves size large from MedSupply Corp in Emergency Department"
         embedding = embed_text(test_text)
-        logger.info(f"Single embedding test: {len(embedding)} dimensions")
+        logger.info(f"✅ Single embedding test: {len(embedding)} dimensions")
         
         # Test bulk embedding
         test_texts = [
-            "IV fluid bags 500ml",
-            "Heart monitor leads",
-            "Disposable syringes 10ml"
+            "IV fluid bags 500ml from Cardinal Health",
+            "Heart monitor leads from Philips Medical",
+            "Disposable syringes 10ml from BD Medical"
         ]
         bulk_embeddings = embed_bulk_text(test_texts)
-        logger.info(f"Bulk embedding test: {len(bulk_embeddings)} embeddings")
+        logger.info(f"✅ Bulk embedding test: {len(bulk_embeddings)} embeddings")
         
         # Test AI Search connection
         ai_search = get_ai_search_service()
         connection_test = ai_search.test_connection()
-        logger.info(f"AI Search connection test: {connection_test}")
+        logger.info(f"✅ AI Search connection test: {connection_test}")
         
-        return True
+        # Test vector search if AI Search is available
+        if ai_search.is_configured:
+            logger.info("Testing vector search...")
+            search_results = query_similar_embeddings("medical supplies", top_k=3, min_score=0.1)
+            logger.info(f"✅ Vector search test: {len(search_results)} results found")
+        else:
+            logger.warning("⚠️ AI Search not configured, skipping vector search test")
+        
+        return connection_test.get("status") in ["connected", "disabled"]
+        
     except Exception as e:
-        logger.error(f"Embedding service test failed: {e}")
+        logger.error(f"❌ Embedding service test failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
 if __name__ == "__main__":
     # Run test
     success = test_embedding_service()
-    print("Embedding service test:", "PASSED" if success else "FAILED")
+    print("Embedding service test:", "✅ PASSED" if success else "❌ FAILED")

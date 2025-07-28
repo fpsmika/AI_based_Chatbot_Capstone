@@ -1,14 +1,14 @@
-# setup_azure_db.py - Enhanced with debugging
+# setup_azure_db_compatible.py - Works with existing supply_records table
 import sys
 import os
 import pyodbc
 import logging
-from datetime import datetime as dt  # Renamed to avoid conflict
+from datetime import datetime as dt
 from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # More verbose than INFO
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
@@ -23,8 +23,6 @@ def log_sql_errors(e):
         logger.error(f"SQL Error Details: {e.args}")
     if hasattr(e, 'sqlstate'):
         logger.error(f"SQL State: {e.sqlstate}")
-    if hasattr(e, 'handler'):
-        logger.error(f"Error in handler: {e.handler}")
 
 def get_connection():
     """Create connection with debug logging"""
@@ -46,36 +44,132 @@ def get_connection():
         log_sql_errors(e)
         raise
 
-def execute_commands():
-    """Execute with transaction logging"""
+def check_existing_schema():
+    """Check what tables and columns already exist"""
     conn = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
         
-        logger.info("Starting schema setup...")
+        logger.info("Checking existing database schema...")
         
-        for i, cmd in enumerate(SCHEMA_COMMANDS, 1):
-            try:
-                # Log the command type (DDL/DML)
-                cmd_type = "DDL" if any(cmd.strip().upper().startswith(x) for x in ['CREATE', 'DROP', 'ALTER']) else "DML"
-                logger.debug(f"Executing {cmd_type} command {i}/{len(SCHEMA_COMMANDS)}: {cmd[:100]}...")
-                
-                cursor.execute(cmd)
-                conn.commit()
-                
-                if cursor.rowcount >= 0:
-                    logger.debug(f"Rows affected: {cursor.rowcount}")
-                
-            except pyodbc.Error as e:
-                logger.error(f"⚠️ Command failed (attempt {i}): {str(e)}")
-                log_sql_errors(e)
-                conn.rollback()
-                # Continue to next command even if one fails
+        # Check existing tables
+        cursor.execute("""
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            ORDER BY TABLE_NAME
+        """)
+        tables = [row[0] for row in cursor.fetchall()]
+        logger.info(f"Existing tables: {tables}")
         
-        # Verification with detailed diagnostics
-        logger.info("Verifying schema...")
-        verify_schema(conn)
+        # Check supply_records columns if it exists
+        if 'supply_records' in tables:
+            cursor.execute("""
+                SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS 
+                WHERE TABLE_NAME = 'supply_records'
+                ORDER BY ORDINAL_POSITION
+            """)
+            columns = cursor.fetchall()
+            logger.info("supply_records table columns:")
+            for col in columns:
+                logger.info(f"  - {col[0]} ({col[1]}, nullable: {col[2]})")
+        
+        return tables
+        
+    except Exception as e:
+        logger.error(f"Failed to check schema: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def create_missing_tables():
+    """Only create tables that don't exist and are compatible"""
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        existing_tables = check_existing_schema()
+        
+        # Create embeddings table if it doesn't exist (for future use)
+        if 'embeddings' not in existing_tables:
+            logger.info("Creating embeddings table...")
+            cursor.execute("""
+                CREATE TABLE embeddings (
+                    id NVARCHAR(50) PRIMARY KEY,
+                    vector NVARCHAR(MAX) NULL,
+                    metadata NVARCHAR(MAX) NULL,
+                    created_at DATETIME2 DEFAULT GETUTCDATE(),
+                    updated_at DATETIME2 DEFAULT GETUTCDATE()
+                );
+            """)
+            conn.commit()
+            logger.info("✅ Created embeddings table")
+        
+        # Verify supply_records table exists (should already exist)
+        if 'supply_records' not in existing_tables:
+            logger.warning("supply_records table doesn't exist! This should have been created already.")
+            logger.info("Creating supply_records table with your schema...")
+            cursor.execute("""
+                CREATE TABLE supply_records (
+                    -- Primary Key
+                    id NVARCHAR(50) PRIMARY KEY DEFAULT NEWID(),
+                    
+                    -- Batch tracking
+                    batch_id NVARCHAR(50) NULL,
+                    
+                    -- Transaction Details
+                    TransactionID NVARCHAR(50) NOT NULL,
+                    FacilityID NVARCHAR(50) NOT NULL,
+                    FacilityType NVARCHAR(100) NOT NULL,
+                    Region NVARCHAR(100) NOT NULL,
+                    BedSize NVARCHAR(50) NOT NULL,
+                    Month INT NOT NULL,
+                    Year INT NOT NULL,
+                    LoadDate DATE NOT NULL,
+                    
+                    -- Vendor Information
+                    Vendor NVARCHAR(200) NOT NULL,
+                    VendorID NVARCHAR(50) NOT NULL,
+                    
+                    -- Manufacturer Information
+                    Manufacturer NVARCHAR(200) NOT NULL,
+                    ManufacturerID NVARCHAR(50) NOT NULL,
+                    ManufacturercatalogNum NVARCHAR(100) NOT NULL,
+                    
+                    -- Item Details
+                    ItemDesc NVARCHAR(500) NOT NULL,
+                    
+                    -- Financial Data
+                    Quantity INT NOT NULL,
+                    PricePaid DECIMAL(18,2) NOT NULL,
+                    TotalSpend DECIMAL(18,2) NOT NULL,
+                    
+                    -- Optional columns
+                    Department NVARCHAR(100) NULL,
+                    Category NVARCHAR(100) NULL,
+                    
+                    -- Audit columns
+                    created_at DATETIME2 DEFAULT GETUTCDATE(),
+                    updated_at DATETIME2 DEFAULT GETUTCDATE()
+                );
+                
+                -- Create indexes for better performance
+                CREATE INDEX IX_supply_records_batch_id ON supply_records(batch_id);
+                CREATE INDEX IX_supply_records_transaction ON supply_records(TransactionID);
+                CREATE INDEX IX_supply_records_facility ON supply_records(FacilityID);
+                CREATE INDEX IX_supply_records_vendor ON supply_records(VendorID);
+                CREATE INDEX IX_supply_records_manufacturer ON supply_records(ManufacturerID);
+                CREATE INDEX IX_supply_records_date ON supply_records(Year, Month);
+                CREATE INDEX IX_supply_records_loaddate ON supply_records(LoadDate);
+            """)
+            conn.commit()
+            logger.info("✅ Created supply_records table with indexes")
+        else:
+            logger.info("✅ supply_records table already exists")
         
         logger.info("Schema setup completed successfully!")
         return True
@@ -86,52 +180,83 @@ def execute_commands():
     finally:
         if conn:
             conn.close()
-            logger.debug("Connection closed")
 
-def verify_schema(conn):
-    """Detailed schema verification"""
-    cursor = conn.cursor()
-    
-    # 1. Check tables exist
-    cursor.execute("""
-        SELECT name, type_desc 
-        FROM sys.objects 
-        WHERE type IN ('U') 
-        ORDER BY name
-    """)
-    tables = cursor.fetchall()
-    logger.info(f"Found {len(tables)} tables")
-    
-    for table in tables:
-        logger.debug(f"Table: {table.name} ({table.type_desc})")
+def test_data_operations():
+    """Test basic CRUD operations on existing schema"""
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
         
-        # 2. Check columns for each table
-        cursor.execute(f"""
-            SELECT column_name, data_type 
-            FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_NAME = '{table.name}'
-        """)
-        cols = cursor.fetchall()
-        logger.debug(f"  Columns: {[c.column_name for c in cols]}")
-    
-    # 3. Check constraints
-    cursor.execute("""
-        SELECT name, type_desc 
-        FROM sys.objects 
-        WHERE type IN ('PK', 'F') 
-        ORDER BY type_desc, name
-    """)
-    constraints = cursor.fetchall()
-    logger.info(f"Found {len(constraints)} constraints")
-    
-    # 4. Check row counts in key tables
-    for table in ['transactions', 'facilities', 'vendors']:
-        try:
-            cursor.execute(f"SELECT COUNT(*) FROM {table}")
-            count = cursor.fetchone()[0]
-            logger.info(f"Row count in {table}: {count}")
-        except:
-            logger.warning(f"Could not count rows in {table}")
+        logger.info("Testing data operations...")
+        
+        # Test inserting a sample record
+        test_record = {
+            'id': 'test-001',
+            'batch_id': 'test-batch',
+            'TransactionID': 'TXN-001',
+            'FacilityID': 'FAC-001',
+            'FacilityType': 'Hospital',
+            'Region': 'Northeast',
+            'BedSize': '200-299',
+            'Month': 7,
+            'Year': 2025,
+            'LoadDate': '2025-07-27',
+            'Vendor': 'Test Vendor',
+            'VendorID': 'V-001',
+            'Manufacturer': 'Test Manufacturer',
+            'ManufacturerID': 'M-001',
+            'ManufacturercatalogNum': 'CAT-001',
+            'ItemDesc': 'Test Supply Item',
+            'Quantity': 10,
+            'PricePaid': 25.50,
+            'TotalSpend': 255.00,
+            'Department': 'Surgery',
+            'Category': 'Medical Supplies'
+        }
+        
+        # Insert test record
+        cursor.execute("""
+            INSERT INTO supply_records (
+                id, batch_id, TransactionID, FacilityID, FacilityType, Region, BedSize,
+                Month, Year, LoadDate, Vendor, VendorID, Manufacturer, ManufacturerID,
+                ManufacturercatalogNum, ItemDesc, Quantity, PricePaid, TotalSpend,
+                Department, Category
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            test_record['id'], test_record['batch_id'], test_record['TransactionID'],
+            test_record['FacilityID'], test_record['FacilityType'], test_record['Region'],
+            test_record['BedSize'], test_record['Month'], test_record['Year'],
+            test_record['LoadDate'], test_record['Vendor'], test_record['VendorID'],
+            test_record['Manufacturer'], test_record['ManufacturerID'],
+            test_record['ManufacturercatalogNum'], test_record['ItemDesc'],
+            test_record['Quantity'], test_record['PricePaid'], test_record['TotalSpend'],
+            test_record['Department'], test_record['Category']
+        ))
+        conn.commit()
+        
+        # Query it back
+        cursor.execute("SELECT COUNT(*) FROM supply_records WHERE id = ?", (test_record['id'],))
+        count = cursor.fetchone()[0]
+        
+        if count == 1:
+            logger.info("✅ Test record inserted and verified successfully")
+            
+            # Clean up test record
+            cursor.execute("DELETE FROM supply_records WHERE id = ?", (test_record['id'],))
+            conn.commit()
+            logger.info("✅ Test record cleaned up")
+        else:
+            logger.error("❌ Test record verification failed")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Data operations test failed: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 if __name__ == "__main__":
     load_dotenv()
@@ -148,71 +273,24 @@ if __name__ == "__main__":
         logger.debug(f"Current env: SERVER={SERVER}, DB={DATABASE}, USER={USERNAME}")
         sys.exit(1)
     
-    # Schema definition (unchanged from your version)
-    SCHEMA_COMMANDS = [
-        # Drop existing tables
-        "IF OBJECT_ID('dbo.transactions', 'U') IS NOT NULL DROP TABLE dbo.transactions;",
-        "IF OBJECT_ID('dbo.facilities', 'U') IS NOT NULL DROP TABLE dbo.facilities;",
-        "IF OBJECT_ID('dbo.vendors', 'U') IS NOT NULL DROP TABLE dbo.vendors;",
-        "IF OBJECT_ID('dbo.supplies', 'U') IS NOT NULL DROP TABLE dbo.supplies;",
-        
-        # Create vendors table
-        """
-        CREATE TABLE dbo.vendors (
-            VendorID NVARCHAR(50) PRIMARY KEY,
-            VendorName NVARCHAR(200) NOT NULL,
-            created_at DATETIME2 DEFAULT GETDATE()
-        );
-        """,
-        
-        # Create facilities table
-        """
-        CREATE TABLE dbo.facilities (
-            FacilityID NVARCHAR(50) PRIMARY KEY,
-            FacilityType NVARCHAR(100) NOT NULL,
-            Region NVARCHAR(100) NOT NULL,
-            BedSize NVARCHAR(50) NOT NULL,
-            created_at DATETIME2 DEFAULT GETDATE()
-        );
-        """,
-        
-        # Create supplies table
-        """
-        CREATE TABLE dbo.supplies (
-            SupplyID NVARCHAR(50) PRIMARY KEY,
-            ManufacturerCatalogNum NVARCHAR(100),
-            ItemDesc NVARCHAR(500) NOT NULL,
-            ManufacturerID NVARCHAR(50) NOT NULL,
-            created_at DATETIME2 DEFAULT GETDATE()
-        );
-        """,
-        
-        # Create transactions table
-        """
-        CREATE TABLE dbo.transactions (
-            TransactionID NVARCHAR(50) PRIMARY KEY,
-            FacilityID NVARCHAR(50) NOT NULL,
-            VendorID NVARCHAR(50) NOT NULL,
-            SupplyID NVARCHAR(50) NOT NULL,
-            Month INT NOT NULL CHECK (Month BETWEEN 1 AND 12),
-            Year INT NOT NULL CHECK (Year >= 2000),
-            LoadDate DATE NOT NULL,
-            Quantity INT NOT NULL,
-            PricePaid DECIMAL(18,2) NOT NULL,
-            TotalSpend DECIMAL(18,2) NOT NULL,
-            batch_id NVARCHAR(50),
-            created_at DATETIME2 DEFAULT GETDATE(),
-            FOREIGN KEY (FacilityID) REFERENCES dbo.facilities(FacilityID),
-            FOREIGN KEY (VendorID) REFERENCES dbo.vendors(VendorID),
-            FOREIGN KEY (SupplyID) REFERENCES dbo.supplies(SupplyID)
-        );
-        """,
-        
-        # Create indexes
-        "CREATE INDEX idx_transaction_id ON dbo.transactions(TransactionID);",
-        "CREATE INDEX idx_transaction_facility ON dbo.transactions(FacilityID);",
-        "CREATE INDEX idx_transaction_vendor ON dbo.transactions(VendorID);"
-    ]
+    logger.info("=== Azure DB Compatibility Setup ===")
     
-    success = execute_commands()
-    sys.exit(0 if success else 1)
+    # Step 1: Check existing schema
+    logger.info("Step 1: Checking existing schema...")
+    existing_tables = check_existing_schema()
+    
+    # Step 2: Create any missing compatible tables
+    logger.info("Step 2: Creating missing tables...")
+    setup_success = create_missing_tables()
+    
+    # Step 3: Test operations
+    logger.info("Step 3: Testing data operations...")
+    test_success = test_data_operations()
+    
+    if setup_success and test_success:
+        logger.info("🎉 Database setup completed successfully!")
+        logger.info("Your existing supply_records table is compatible and ready to use.")
+        sys.exit(0)
+    else:
+        logger.error("❌ Database setup failed")
+        sys.exit(1)

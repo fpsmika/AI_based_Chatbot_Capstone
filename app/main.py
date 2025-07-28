@@ -283,54 +283,6 @@ def get_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
     return transaction
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    """AI-powered chatbot endpoint with context"""
-    logger.info(f"Received chat message: {request.message}")
-    
-    try:
-        # Get relevant transaction data for context
-        relevant_transactions = Transaction.search_relevant(db, request.message, limit=3)
-        
-        # Build context for AI
-        context = ""
-        if relevant_transactions:
-            context = "Recent transaction data:\n"
-            for tx in relevant_transactions:
-                context += f"- {tx.Vendor} ({tx.FacilityType}, {tx.Region})\n"
-        
-        # Create enhanced prompt with context
-        system_prompt = """You are an AI assistant specializing in supply chain management. 
-        Help users with transaction data, vendor information, and supply chain queries.
-        Be concise but helpful. If asked about specific data, reference the context provided."""
-        
-        enhanced_prompt = f"{system_prompt}\n\nContext: {context}\n\nUser Question: {request.message}"
-        
-        # Get AI response
-        ai_response = LlamaService.query(enhanced_prompt, max_tokens=300)
-        
-        # Generate contextual suggestions
-        suggestions = []
-        if "vendor" in request.message.lower():
-            suggestions.extend(["Show vendor analytics", "Compare vendor performance"])
-        if "transaction" in request.message.lower():
-            suggestions.extend(["View recent transactions", "Transaction by date range"])
-        if not suggestions:
-            suggestions = ["Order status", "Inventory check", "Supplier contact"]
-        
-        return ChatResponse(
-            response=ai_response,
-            suggestions=suggestions[:3],  # Limit to 3 suggestions
-            context=context if context else None
-        )
-        
-    except Exception as e:
-        logger.error(f"Chat endpoint error: {str(e)}")
-        # Fallback response
-        return ChatResponse(
-            response=f"I encountered an issue processing your request: {str(e)}. Please try again.",
-            suggestions=["Try rephrasing", "Check system status", "Contact support"]
-        )
 
 # Add a simple chat test endpoint
 @app.post("/chat/test")
