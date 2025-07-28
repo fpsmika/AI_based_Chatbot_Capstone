@@ -1151,7 +1151,6 @@ const MedMineChatbot = () => {
                 <button
                   key={chat.id}
                   onClick={() => loadChatSession(chat.id)}
-                  style={{
                   style={styles.chatHistoryItem}
                   onMouseEnter={(e) => {
                     (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
