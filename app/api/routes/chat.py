@@ -50,13 +50,52 @@ def _generate_suggestions(message: str) -> List[str]:
     return SUGGESTIONS_MAP['default']
 
 def _format_search_results(results: List[Dict]) -> str:
-    """Format search results for LLM context"""
-    return "\n".join(
-        f"{i}. {res.get('ItemDesc', res.get('item_desc', 'Item'))} | "
-        f"Vendor: {res.get('Vendor', res.get('vendor', 'N/A'))} | "
-        f"Spend: ${float(res.get('TotalSpend', res.get('total_spend', 0))):,.2f}"
-        for i, res in enumerate(results[:5], 1)
-    )
+    """Format search results for LLM context - FIXED to include all relevant fields"""
+    if not results:
+        return "No matching records found."
+    
+    formatted_results = []
+    for i, res in enumerate(results[:10], 1):  # Show more results
+        # Build comprehensive result string
+        result_parts = []
+        
+        # Core item info
+        item_desc = res.get('ItemDesc', res.get('item_desc', 'Unknown Item'))
+        result_parts.append(f"Item: {item_desc}")
+        
+        # Vendor info
+        vendor = res.get('Vendor', res.get('vendor', 'Unknown Vendor'))
+        result_parts.append(f"Vendor: {vendor}")
+        
+        # CRITICAL FIX: Include Region information
+        region = res.get('Region', res.get('region', ''))
+        if region and region != 'Unknown':
+            result_parts.append(f"Region: {region}")
+        
+        # Facility and location info
+        facility_type = res.get('FacilityType', res.get('facility_type', ''))
+        if facility_type and facility_type != 'Unknown':
+            result_parts.append(f"Facility: {facility_type}")
+        
+        # Department info
+        department = res.get('Department', res.get('department', ''))
+        if department and department != 'Unknown':
+            result_parts.append(f"Department: {department}")
+        
+        # Financial info
+        total_spend = res.get('TotalSpend', res.get('total_spend', 0))
+        if total_spend:
+            result_parts.append(f"Spend: ${float(total_spend):,.2f}")
+        
+        # Quantity if available
+        quantity = res.get('Quantity', res.get('quantity', ''))
+        if quantity:
+            result_parts.append(f"Qty: {quantity}")
+        
+        # Join all parts
+        formatted_results.append(f"{i}. {' | '.join(result_parts)}")
+    
+    return "Relevant Data Found:\n" + "\n".join(formatted_results)
 
 def _analyze_csv_data(csv_data: CSVData) -> str:
     """Analyze uploaded CSV data for LLM context"""
@@ -80,28 +119,56 @@ def _analyze_csv_data(csv_data: CSVData) -> str:
     return "Uploaded Data Analysis:\n" + "\n".join(analysis)
 
 async def _get_search_results(query: str) -> List[Dict]:
-    """Get hybrid search results combining vector search from AI Search and full-text search"""
+    """Get hybrid search results - ENHANCED to preserve all metadata"""
     try:
         logger.info(f"Getting search results for query: '{query}'")
         
-        # Get vector results using the updated embedding service (which now uses AI Search)
-        vector_results = query_similar_embeddings(query, top_k=5)
+        # For region queries, use broader search terms
+        if 'region' in query.lower():
+            search_terms = ['region', 'facility', 'location', 'area']
+            all_results = []
+            
+            for term in search_terms:
+                vector_results = query_similar_embeddings(term, top_k=15, min_score=0.2)
+                all_results.extend(vector_results)
+        else:
+            # Regular search
+            vector_results = query_similar_embeddings(query, top_k=10, min_score=0.3)
+            all_results = vector_results
         
         # Get AI Search full-text results
         ai_search = get_ai_search_service()
-        ai_results = ai_search.search(query, top=5)
+        ai_results = ai_search.search(query, top=10)
         
-        # Combine and deduplicate
+        # Combine and deduplicate while preserving ALL metadata
         combined = []
         seen_ids = set()
         
-        # Process vector results
-        for r in vector_results:
-            doc_id = r["metadata"].get("TransactionID")
+        # Process vector results - PRESERVE ALL METADATA
+        for r in all_results:
+            metadata = r.get("metadata", {})
+            doc_id = metadata.get("TransactionID", metadata.get("transaction_id"))
+            
             if doc_id and doc_id not in seen_ids:
-                result_data = r["metadata"].copy()
-                result_data["similarity"] = r["similarity"]
-                result_data["source"] = "vector"
+                # Create comprehensive result with ALL fields
+                result_data = {
+                    # Ensure all possible field variations are captured
+                    "TransactionID": metadata.get("TransactionID", metadata.get("transaction_id", "")),
+                    "ItemDesc": metadata.get("ItemDesc", metadata.get("item_desc", "")),
+                    "Vendor": metadata.get("Vendor", metadata.get("vendor", "")),
+                    "Region": metadata.get("Region", metadata.get("region", "")),  # CRITICAL
+                    "FacilityType": metadata.get("FacilityType", metadata.get("facility_type", "")),
+                    "Department": metadata.get("Department", metadata.get("department", "")),
+                    "Category": metadata.get("Category", metadata.get("category", "")),
+                    "TotalSpend": metadata.get("TotalSpend", metadata.get("total_spend", 0)),
+                    "Quantity": metadata.get("Quantity", metadata.get("quantity", "")),
+                    "Month": metadata.get("Month", metadata.get("month", "")),
+                    "Year": metadata.get("Year", metadata.get("year", "")),
+                    "similarity": r.get("similarity", 0),
+                    "source": "vector",
+                    # Include ALL original metadata
+                    **metadata
+                }
                 combined.append(result_data)
                 seen_ids.add(doc_id)
         
@@ -111,11 +178,21 @@ async def _get_search_results(query: str) -> List[Dict]:
             if doc_id and doc_id not in seen_ids:
                 result_data = r.copy()
                 result_data["source"] = "ai_search"
-                result_data["similarity"] = 0.7  # Default similarity for full-text
+                result_data["similarity"] = 0.7
                 combined.append(result_data)
                 seen_ids.add(doc_id)
         
         logger.info(f"Combined search returned {len(combined)} results")
+        
+        # For region queries, also log what regions we found
+        if 'region' in query.lower():
+            found_regions = set()
+            for r in combined:
+                region = r.get('Region', r.get('region'))
+                if region and region != 'Unknown':
+                    found_regions.add(region)
+            logger.info(f"Regions found in search results: {list(found_regions)}")
+        
         return combined
         
     except Exception as e:

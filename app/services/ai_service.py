@@ -47,3 +47,4 @@ def generate_response(prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS, **kwarg
     except requests.RequestException as e:
         print(f" LLaMA API error: {e}")
         return " Error generating response from LLaMA API."
+    

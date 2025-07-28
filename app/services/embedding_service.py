@@ -3,6 +3,7 @@ import os
 import uuid
 import logging
 import pandas as pd
+import json
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 from app.utils.supply_data_parser import csv_to_purchase_chunks
@@ -343,6 +344,18 @@ def process_and_embed_records(records: List[Dict], batch_size: int = 500) -> Dic
             "chunks_processed": 0
         }
 
+def _parse_stored_metadata(metadata_str: str) -> Dict[str, Any]:
+    """Parse stored JSON metadata safely"""
+    try:
+        if metadata_str:
+            import json
+            parsed = json.loads(metadata_str)
+            if isinstance(parsed, dict):
+                return parsed
+    except Exception as e:
+        logger.debug(f"Failed to parse metadata: {e}")
+    return {}
+
 def query_similar_embeddings(query_text: str, top_k: int = 15, min_score: float = 0.3) -> List[Dict[str, Any]]:
     """
     Find similar embeddings using Azure AI Search vector search with improved result mapping
@@ -392,7 +405,7 @@ def query_similar_embeddings(query_text: str, top_k: int = 15, min_score: float 
                     "content": result.get("content", ""),
                     
                     # Try to parse stored metadata if available
-                    **self._parse_stored_metadata(result.get("metadata", "{}"))
+                    **_parse_stored_metadata(result.get("metadata", "{}"))
                 }
                 
                 filtered_results.append({
@@ -416,18 +429,6 @@ def query_similar_embeddings(query_text: str, top_k: int = 15, min_score: float 
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return []
-
-def _parse_stored_metadata(metadata_str: str) -> Dict[str, Any]:
-    """Parse stored JSON metadata safely"""
-    try:
-        if metadata_str:
-            import json
-            parsed = json.loads(metadata_str)
-            if isinstance(parsed, dict):
-                return parsed
-    except Exception as e:
-        logger.debug(f"Failed to parse metadata: {e}")
-    return {}
 
 def test_embedding_service():
     """
@@ -470,6 +471,46 @@ def test_embedding_service():
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         return False
+    
+
+
+def quick_region_test():
+    """Quick test to see what regions are available"""
+    print("🔍 Quick region test...")
+    
+    # Test the exact query from your logs
+    query = "can you give me a list of regions listed in the doc? briefly"
+    results = query_similar_embeddings(query, top_k=5, min_score=0.3)
+    
+    print(f"Query: '{query}'")
+    print(f"Results found: {len(results)}")
+    
+    regions = set()
+    for i, result in enumerate(results):
+        metadata = result.get('metadata', {})
+        region = metadata.get('Region', metadata.get('region', 'Unknown'))
+        regions.add(region)
+        
+        print(f"\nResult {i+1}:")
+        print(f"  Region: {region}")
+        print(f"  Content: {result.get('content', 'NO_CONTENT')[:100]}...")
+        print(f"  Similarity: {result.get('similarity', 0):.3f}")
+    
+    print(f"\nUnique regions found: {list(regions)}")
+    
+    # Also test with a simpler query
+    simple_results = query_similar_embeddings("region", top_k=10, min_score=0.2)
+    simple_regions = set()
+    for result in simple_results:
+        metadata = result.get('metadata', {})
+        region = metadata.get('Region', metadata.get('region', 'Unknown'))
+        if region != 'Unknown':
+            simple_regions.add(region)
+    
+    print(f"Regions from simple 'region' query: {list(simple_regions)}")
+
+if __name__ == "__main__":
+    quick_region_test()
 
 if __name__ == "__main__":
     # Run test

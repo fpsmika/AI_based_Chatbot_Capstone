@@ -25,3 +25,5 @@ python-multipart==0.0.7  # FastAPI file uploads
 # === Pydantic ===
 pydantic==2.5.3
 pydantic-settings==2.1.0  # Add this line
+
+huggingface_hub==0.16.4 

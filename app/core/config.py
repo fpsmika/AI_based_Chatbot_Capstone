@@ -118,6 +118,32 @@ class Settings(BaseSettings):
             return f"https://{self.AZURE_SEARCH_SERVICE_NAME}.search.windows.net"
         return ""
     
+
+    def get_raw_connection_string(self) -> str:
+        """Generate a raw ODBC connection string"""
+        return (
+            f"Driver={{{self.SQL_DRIVER}}};"
+            f"Server={self.SQL_SERVER};"
+            f"Database={self.SQL_DATABASE};"
+            f"Uid={self.SQL_USERNAME};"
+            f"Pwd={self.SQL_PASSWORD};"
+            f"Encrypt=yes;"
+            f"TrustServerCertificate=no;"
+            f"Connection Timeout=30;"
+        )
+
+    def get_database_config_status(self) -> dict:
+        """Return a dictionary showing the status of database configuration"""
+        return {
+            "SQL_SERVER configured": bool(self.SQL_SERVER),
+            "SQL_DATABASE configured": bool(self.SQL_DATABASE),
+            "SQL_USERNAME configured": bool(self.SQL_USERNAME),
+            "SQL_PASSWORD configured": bool(self.SQL_PASSWORD),
+            "SQL_DRIVER configured": bool(self.SQL_DRIVER),
+            "Can generate connection string": bool(self.get_raw_connection_string()),
+            "Can generate SQLAlchemy URL": bool(self.get_database_url)
+        }
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
@@ -166,6 +192,64 @@ def is_production() -> bool:
 def is_development() -> bool:
     """Check if running in development"""
     return get_environment() == "development"
+
+
+
+def test_database_connection():
+    """Test the database connection and return diagnostic information"""
+    from app.core.config import settings
+    import pyodbc
+    from datetime import datetime
+    
+    result = {
+        "success": False,
+        "error": None,
+        "error_type": None,
+        "server_version": None,
+        "timestamp": datetime.now().isoformat(),
+        "guidance": None
+    }
+    
+    if not hasattr(settings, 'get_raw_connection_string'):
+        result["error"] = "get_raw_connection_string() method not available"
+        result["error_type"] = "ConfigurationError"
+        result["guidance"] = "Add get_raw_connection_string() method to settings"
+        return result
+    
+    try:
+        conn_str = settings.get_raw_connection_string()
+        with pyodbc.connect(conn_str, timeout=30) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT @@VERSION")
+            version = cursor.fetchone()[0]
+            
+            result["success"] = True
+            result["server_version"] = version.split('\n')[0]
+            return result
+            
+    except pyodbc.Error as e:
+        result["error"] = str(e)
+        result["error_type"] = "DatabaseError"
+        
+        if "Cannot open database" in str(e):
+            result["guidance"] = "Database might not exist or credentials are incorrect"
+        elif "login failed" in str(e):
+            result["guidance"] = "Authentication failed - check username and password"
+        elif "server not found" in str(e):
+            result["guidance"] = "Server name might be incorrect or network issues"
+        elif "timeout" in str(e):
+            result["guidance"] = "Connection timed out - check firewall rules and network"
+        elif "driver" in str(e).lower():
+            result["guidance"] = "ODBC driver might not be installed"
+        elif "40613" in str(e):
+            result["guidance"] = "Database might be paused - check Azure portal"
+        
+        return result
+    except Exception as e:
+        result["error"] = str(e)
+        result["error_type"] = "UnknownError"
+        result["guidance"] = "Unexpected error occurred - check logs for details"
+        return result
 
 # Database table configurations
 DATABASE_TABLES = {
