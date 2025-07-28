@@ -75,7 +75,7 @@ const MedMineChatbot = () => {
     {
       id: 1,
       type: 'assistant',
-      content: "Hello! I'm Earl, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
+      content: "Hello! I'm EARL, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
       timestamp: new Date()
     }
   ]);
@@ -338,7 +338,7 @@ const handleSendMessage = async () => {
     // Create chat content
     const chatContent = messages.map(msg => {
       const timestamp = msg.timestamp.toLocaleString();
-      const sender = msg.type === 'user' ? 'You' : msg.type === 'assistant' ? 'Earl' : 'System';
+      const sender = msg.type === 'user' ? 'You' : msg.type === 'assistant' ? 'EARL' : 'System';
       return `[${timestamp}] ${sender}: ${msg.content}`;
     }).join('\n\n');
 
@@ -404,7 +404,7 @@ const handleSendMessage = async () => {
     setMessages([{
       id: 1,
       type: 'assistant',
-      content: "Hello! I'm Earl, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
+      content: "Hello! I'm EARL, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
       timestamp: new Date()
     }]);
     setCurrentChatId(null);
@@ -788,7 +788,7 @@ const handleSendMessage = async () => {
               <Icons.Bot />
             </div>
             <div>
-              <h1 style={styles.title}>Earl</h1>
+              <h1 style={styles.title}>EARL</h1>
               <p style={styles.subtitle}>MedMine AI Assistant</p>
             </div>
           </div>
@@ -965,7 +965,7 @@ const handleSendMessage = async () => {
           <div style={styles.chatHeaderContent}>
             <div>
               <h2 style={styles.chatTitle}>Purchase Order Analysis</h2>
-              <p style={styles.chatSubtitle}>Ask Earl about your procurement data</p>
+              <p style={styles.chatSubtitle}>Ask EARL about your procurement data</p>
             </div>
             <div style={styles.chatActions}>
               <button
@@ -1039,7 +1039,7 @@ const handleSendMessage = async () => {
                     <div style={styles.spinner}>
                       <Icons.Loader />
                     </div>
-                    <p style={{...styles.messageText, color: '#6b7280'}}>Earl is analyzing...</p>
+                    <p style={{...styles.messageText, color: '#6b7280'}}>EARL is analyzing...</p>
                   </div>
                 </div>
               </div>
@@ -1088,12 +1088,12 @@ const handleSendMessage = async () => {
                 }
               }}
             >
-              <span>Ask Earl</span>
+              <span>Ask EARL</span>
               <Icons.Send />
             </button>
           </div>
           <p style={styles.disclaimer}>
-            Earl can analyze your procurement data, compare vendors, and provide spending insights.
+            EARL can analyze your procurement data, compare vendors, and provide spending insights.
           </p>
         </div>
       </div>
