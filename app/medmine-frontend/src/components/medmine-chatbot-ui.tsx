@@ -211,6 +211,15 @@ const MedMineChatbot = () => {
     setUploadedFile(null);
     setFileData(null);
     setShowFilePreview(false);
+    setCurrentBatch(null);
+    setTotalRows(0);
+    setSearchResults([]);
+    setShowSearchResults(false);
+    
+    // Clear the file input value to allow re-uploading the same file
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
   };
 
   const downloadChat = () => {
@@ -254,6 +263,10 @@ const MedMineChatbot = () => {
           timestamp: new Date()
         }
       ]);
+      // Clear the input value after showing error
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
       return;
     }
 
@@ -345,6 +358,11 @@ const MedMineChatbot = () => {
       setUploadedFile(null);
       setFileData(null);
       setShowFilePreview(false);
+      
+      // Clear the input value after error
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
