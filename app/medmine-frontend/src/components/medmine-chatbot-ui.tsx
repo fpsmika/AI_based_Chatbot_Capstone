@@ -276,55 +276,6 @@ const handleSendMessage = async () => {
   }
 };
 
-//////
-
-//////Previous mock response code
-
-//   const handleSendMessage = async () => {
-//     if (!inputValue.trim()) return;
-
-//     const userMessage = {
-//       id: Date.now(),
-//       type: 'user',
-//       content: inputValue,
-//       timestamp: new Date()
-//     };
-
-//     setMessages(prev => [...prev, userMessage]);
-//     setInputValue('');
-//     setIsLoading(true);
-
-    
-
-
-//     setTimeout(() => {
-//       const assistantMessage = {
-//         id: Date.now() + 1,
-//         type: 'assistant',
-//         content: generateMockResponse(inputValue),
-//         timestamp: new Date()
-//       };
-      
-//       setMessages(prev => [...prev, assistantMessage]);
-//       setIsLoading(false);
-//      }, 2500);
-//   };
-// const generateMockResponse = (query: string): string => { return "Timeout: "+query; }
-
-
-  // const generateMockResponse = (query: string): string => {
-  //   const lowerQuery = query.toLowerCase();
-  //   if (lowerQuery.includes('spending') || lowerQuery.includes('cost')) {
-  //     return "Based on your purchase order data, total spending on the requested items is $1,120.75. This represents a 15% increase compared to the previous period.";
-  //   } else if (lowerQuery.includes('vendor') || lowerQuery.includes('supplier')) {
-  //     return "MedSupply Co is your top vendor with 3 orders totaling $640.25, followed by FluidTech with $275.50. MedSupply Co offers competitive pricing for surgical supplies.";
-  //   } else if (lowerQuery.includes('department')) {
-  //     return "Surgery department has the highest procurement activity with 2 major orders. Emergency and ICU departments follow with significant medical supply purchases.";
-  //   } else {
-  //     return "I've analyzed your purchase order data. Could you please be more specific about what you'd like to know? I can help with spending analysis, vendor comparisons, or departmental insights.";
-  //   }
-  // };
-
 
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
