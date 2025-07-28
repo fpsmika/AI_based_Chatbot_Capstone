@@ -201,9 +201,16 @@ class AISearchService:
                 'Department': str(doc.get('Department', doc.get('department', 'Unknown'))),
                 'Category': str(doc.get('Category', doc.get('category', 'Unknown'))),
                 
+                # Additional fields from your index schema
+                'VendorID': str(doc.get('VendorID', doc.get('vendor_id', ''))),
+                'ManufacturerID': str(doc.get('ManufacturerID', doc.get('manufacturer_id', ''))),
+                'ManufacturercatalogNum': str(doc.get('ManufacturercatalogNum', doc.get('manufacturercatalognum', doc.get('catalog_num', '')))),
+                'BedSize': str(doc.get('BedSize', doc.get('bed_size', ''))),
+                
                 # Numeric fields
                 'PricePaid': self._safe_float(doc.get('PricePaid', doc.get('price_paid', 0.0))),
                 'TotalSpend': self._safe_float(doc.get('TotalSpend', doc.get('total_spend', 0.0))),
+                'UnitCost': self._safe_float(doc.get('UnitCost', doc.get('unit_cost', 0.0))),
                 'Quantity': self._safe_int(doc.get('Quantity', doc.get('quantity', 0))),
                 
                 # Date field
@@ -212,7 +219,9 @@ class AISearchService:
                 # Additional metadata for better search
                 'Month': self._safe_int(doc.get('Month', doc.get('month', 0))),
                 'Year': self._safe_int(doc.get('Year', doc.get('year', 0))),
-                'BatchId': str(doc.get('batch_id', doc.get('BatchId', ''))),
+                
+                # FIXED: Use lowercase batch_id to match your index schema
+                'batch_id': str(doc.get('batch_id', doc.get('BatchId', ''))),
                 
                 # Store full metadata as JSON for reference
                 'metadata': json.dumps(doc, default=str)
@@ -229,6 +238,10 @@ class AISearchService:
                     # Only include LoadDate if we have a valid date
                     if value and value != '':
                         cleaned_doc[key] = value
+                elif key == 'batch_id':
+                    # Only include batch_id if it has a valid value
+                    if value and str(value).strip():
+                        cleaned_doc[key] = str(value).strip()
                 else:
                     # For all other fields, include even if empty
                     cleaned_doc[key] = value if value is not None else ''
@@ -503,7 +516,7 @@ class AISearchService:
                 # Date field
                 SimpleField(name="LoadDate", type=SearchFieldDataType.DateTimeOffset, filterable=True, sortable=True),
                 
-                # Batch tracking
+                # Batch tracking - FIXED: Use SearchFieldDataType.String instead of "Edm.String"
                 SimpleField(name="BatchId", type=SearchFieldDataType.String, filterable=True),
                 
                 # Metadata storage

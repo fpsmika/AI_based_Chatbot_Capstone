@@ -122,15 +122,25 @@ def process_and_embed_csv(file_path: str, batch_size: int = 500) -> Dict[str, An
                         "Department": str(metadata.get("department", metadata.get("Department", "Unknown"))),
                         "Category": str(metadata.get("category", metadata.get("Category", "Unknown"))),
                         
+                        # Additional fields to match your index
+                        "VendorID": str(metadata.get("vendor_id", metadata.get("VendorID", ""))),
+                        "ManufacturerID": str(metadata.get("manufacturer_id", metadata.get("ManufacturerID", ""))),
+                        "ManufacturercatalogNum": str(metadata.get("manufacturercatalognum", metadata.get("catalog_num", ""))),
+                        "BedSize": str(metadata.get("bed_size", metadata.get("BedSize", ""))),
+                        
                         # Numeric fields with fallbacks
                         "TotalSpend": float(metadata.get("total_spend", metadata.get("TotalSpend", 0))),
                         "PricePaid": float(metadata.get("price_paid", metadata.get("PricePaid", 0))),
+                        "UnitCost": float(metadata.get("unit_cost", metadata.get("UnitCost", 0))),
                         "Quantity": int(metadata.get("quantity", metadata.get("Quantity", 0))),
                         "Month": int(metadata.get("month", metadata.get("Month", 0))),
                         "Year": int(metadata.get("year", metadata.get("Year", 0))),
                         
+                        # FIXED: Use batch_id (lowercase) to match your index schema
+                        "batch_id": str(metadata.get("batch_id", "")),
+                        
                         # Store original metadata for reference
-                        "metadata": metadata
+                        "metadata": json.dumps(metadata, default=str)
                     }
                     documents.append(doc)
 
@@ -282,18 +292,25 @@ def process_and_embed_records(records: List[Dict], batch_size: int = 500) -> Dic
                         "Department": str(metadata.get("department", metadata.get("Department", "Unknown"))),
                         "Category": str(metadata.get("category", metadata.get("Category", "Unknown"))),
                         
+                        # Additional fields
+                        "VendorID": str(metadata.get("vendor_id", metadata.get("VendorID", ""))),
+                        "ManufacturerID": str(metadata.get("manufacturer_id", metadata.get("ManufacturerID", ""))),
+                        "ManufacturercatalogNum": str(metadata.get("manufacturercatalognum", metadata.get("catalog_num", ""))),
+                        "BedSize": str(metadata.get("bed_size", metadata.get("BedSize", ""))),
+                        
                         # Numeric fields
                         "TotalSpend": float(metadata.get("total_spend", metadata.get("TotalSpend", 0))),
                         "PricePaid": float(metadata.get("price_paid", metadata.get("PricePaid", 0))),
+                        "UnitCost": float(metadata.get("unit_cost", metadata.get("UnitCost", 0))),
                         "Quantity": int(metadata.get("quantity", metadata.get("Quantity", 0))),
                         "Month": int(metadata.get("month", metadata.get("Month", 0))),
                         "Year": int(metadata.get("year", metadata.get("Year", 0))),
                         
-                        # Batch tracking
-                        "BatchId": str(metadata.get("batch_id", "")),
+                        # FIXED: Use batch_id (lowercase) to match your index schema
+                        "batch_id": str(metadata.get("batch_id", "")),
                         
                         # Full metadata
-                        "metadata": metadata
+                        "metadata": json.dumps(metadata, default=str)
                     }
                     documents.append(doc)
 
