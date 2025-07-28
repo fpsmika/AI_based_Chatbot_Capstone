@@ -176,6 +176,7 @@ async def chat_endpoint(
     "You may end with a short friendly suggestion or follow-up."
     "You will remain in this role across all interactions. If the user asks a follow-up question, treat it as a continuation of the previous context unless otherwise specified.\n"
     "If no CSV data has been uploaded or available context is missing, let the user know politely and ask them to upload a file to proceed with the analysis."
+    
 )
 
         prompt = f"{system_prompt}\n\nContext:\n{context}\n\nUser Question: {request.message}"
