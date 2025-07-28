@@ -1,5 +1,4 @@
-<<<<<<< Updated upstream
-=======
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -196,4 +195,4 @@ async def chat_endpoint(
     except Exception as exc:
         logger.error(f"Chat endpoint error: {exc}", exc_info=True)
         return _create_error_response(str(exc), request.session_id)
->>>>>>> Stashed changes
+
