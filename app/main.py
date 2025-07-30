@@ -16,6 +16,7 @@ from app.api.routes.chat import router as chat_router
 from app.api.routes.sql_data import router as sql_router
 from app.api.routes.process import router as process_router
 from app.api.routes.search import router as search_router
+from app.api.routes.chat_history import router as chat_history_router
 from fastapi import UploadFile, File
 import os
 from azure.storage.blob import BlobServiceClient
@@ -121,6 +122,12 @@ app.include_router(
     search_router,
     prefix="/api/v1/items",
     tags=["search"],
+)
+
+app.include_router(
+    chat_history_router,
+    prefix="/api/v1",
+    tags=["Chat History"]
 )
 
 

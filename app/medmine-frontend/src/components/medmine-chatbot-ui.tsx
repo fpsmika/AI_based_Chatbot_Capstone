@@ -32,13 +32,6 @@ const Icons = {
       <line x1="12" y1="15" x2="12" y2="3"/>
     </svg>
   ),
-  Settings: () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <circle cx="12" cy="12" r="3"/>
-      <path d="M12 1v6m0 6v6"/>
-      <path d="m21 12-6-6v12l6-6z"/>
-    </svg>
-  ),
   Search: () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <circle cx="11" cy="11" r="8"/>
@@ -78,7 +71,13 @@ const Icons = {
       <path d="M3 5v14c0 3 6 3 9 3s9 0 9-3V5"/>
       <path d="M3 12c0 3 6 3 9 3s9 0 9-3"/>
     </svg>
-  )
+  ),
+  Trash: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="3 6 5 6 21 6"/>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+    </svg>
+  ),
 };
 
 // Enhanced interfaces
@@ -139,7 +138,7 @@ const MedMineChatbot = () => {
     {
       id: 1,
       type: 'assistant',
-      content: "Hello! I'm Earl, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
+      content: "Hello! I'm EARL, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
       timestamp: new Date()
     }
   ]);
@@ -156,53 +155,248 @@ const MedMineChatbot = () => {
   const [currentBatch, setCurrentBatch] = useState<string | null>(null);
   const [totalRows, setTotalRows] = useState<number>(0);
 
+  // Chat history state
+  const [chatHistory, setChatHistory] = useState<Array<{
+    id: string;
+    title: string;
+    created_at: string;
+    message_count: number;
+  }>>([]);
+
   const [sessionId] = useState(() => {
     return crypto.randomUUID();
   });
-
-  const querySuggestions = [
-    "What's our total spending on gloves this year?",
-    "Compare vendor A and vendor B for IV bags",
-    "Which department purchased the most items?",
-    "Show me the top 5 most expensive purchases",
-    "How has our PPE spending changed over time?",
-    "/search surgical gloves"
-  ];
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [isSavingMessage, setIsSavingMessage] = useState(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Fetch chat history on component mount
+  useEffect(() => {
+    fetchChatHistory();
+  }, []);
+
+  useEffect(() => {
+    if (!currentChatId && chatHistory.length === 0) {
+      createNewChatSession();
+    }
+  }, [chatHistory]);
+
+  const fetchChatHistory = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setChatHistory(data.chats || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch chat history:', error);
+    }
+  };
+
+  const createNewChatSession = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}/create`, {
+        method: 'POST'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentChatId(data.chat_id);
+        
+        
+        fetchChatHistory();
+        return data.chat_id;
+      }
+    } catch (error) {
+      console.error('Failed to create new chat session:', error);
+    }
+    return null;
+  };
+
+  const saveMessageToDb = async (chatId: string, message: any) => {
+  // Prevent duplicate saves
+    if (isSavingMessage) {
+      console.log('Already saving a message, skipping...');
+      return;
+    }
+    
+    setIsSavingMessage(true);
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: message.type,
+          content: message.content,
+          context: message.context || null,
+          suggestions: message.suggestions || [],
+          sources: message.sources || []
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to save message: ${response.status}`);
+      }
+      
+      console.log('Message saved successfully');
+    } catch (error) {
+      console.error('Failed to save message:', error);
+      // You might want to show a user-friendly error here
+    } finally {
+      setIsSavingMessage(false);
+    }
+  };
+
+  const loadChatSession = async (chatId: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}/${chatId}`);
+      if (response.ok) {
+        const data = await response.json();
+        
+        // 转换消息格式
+        const uiMessages = data.messages.map((msg: any, index: number) => ({
+          id: index + 1,
+          type: msg.type,
+          content: msg.content,
+          timestamp: new Date(msg.timestamp),
+          context: msg.context,
+          suggestions: msg.suggestions,
+          sources: msg.sources
+        }));
+        
+        setMessages(uiMessages || []);
+        setCurrentChatId(chatId);
+        
+        if (data.chat_info?.file_info) {
+          const fileInfo = data.chat_info.file_info;
+          setUploadedFile({
+            name: fileInfo.name,
+            batch_id: fileInfo.batch_id,
+            rows_loaded: fileInfo.rows_loaded
+          } as any);
+          setCurrentBatch(fileInfo.batch_id);
+          setTotalRows(fileInfo.rows_loaded);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load chat session:', error);
+    }
+  };
+
+  const createNewChat = async () => {
+    const newChatId = await createNewChatSession();
+    if (newChatId) {
+      setMessages([{
+        id: 1,
+        type: 'assistant',
+        content: "Hello! I'm EARL, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
+        timestamp: new Date()
+      }]);
+      setCurrentChatId(newChatId);
+      setUploadedFile(null);
+      setFileData(null);
+      setShowFilePreview(false);
+      setCurrentBatch(null);
+      setTotalRows(0);
+      setSearchResults([]);
+      setShowSearchResults(false);
+      
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      
+      fetchChatHistory();
+    }
+  };
+
+  const deleteChatSession = async (chatId: string) => {
+    if (window.confirm('Are you sure you want to delete this chat?')) {
+      try {
+        const response = await fetch(`${API_BASE}/cosmos/chats/${chatId}`, {
+          method: 'DELETE'
+        });
+        if (response.ok) {
+          if (chatId === currentChatId) {
+            await createNewChat();
+          }
+          fetchChatHistory();
+        }
+      } catch (error) {
+        console.error('Failed to delete chat:', error);
+      }
+    }
+  };
+
+  const downloadChat = () => {
+    // Create chat content
+    const chatContent = messages.map(msg => {
+      const timestamp = msg.timestamp.toLocaleString();
+      const sender = msg.type === 'user' ? 'You' : msg.type === 'assistant' ? 'EARL' : 'System';
+      return `[${timestamp}] ${sender}: ${msg.content}`;
+    }).join('\n\n');
+
+    // Add header
+    const header = `MedMine Chat Export\nDate: ${new Date().toLocaleString()}\n${uploadedFile ? `Data File: ${uploadedFile.name}` : 'No data file uploaded'}\n${'='.repeat(50)}\n\n`;
+    const fullContent = header + chatContent;
+
+    // Create blob and download
+    const blob = new Blob([fullContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `medmine-chat-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    // 确保有聊天会话
+    let chatId = currentChatId;
+    if (!chatId) {
+      chatId = await createNewChatSession();
+      if (!chatId) {
+        console.error('Failed to create chat session');
+        return;
+      }
+    }
 
     // Validate extension client‑side
     const allowed = ['.csv', '.xlsx', '.xls'];
     const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
     if (!allowed.includes(ext)) {
-      setMessages(m => [
-        ...m,
-        {
-          id: Date.now(),
-          type: 'system',
-          content: `Unsupported file type "${ext}". Please upload one of: ${allowed.join(', ')}`,
-          timestamp: new Date()
-        }
-      ]);
+      const errorMsg = {
+        id: Date.now(),
+        type: 'system' as const,
+        content: `Unsupported file type "${ext}". Please upload one of: ${allowed.join(', ')}`,
+        timestamp: new Date()
+      };
+      setMessages(m => [...m, errorMsg]);
+      
+      // 保存错误消息到数据库
+      await saveMessageToDb(chatId, errorMsg);
+      
+      // Clear the input value after showing error
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
       return;
     }
 
     setUploadedFile(file);
-    setMessages(m => [
-      ...m,
-      {
-        id: Date.now(),
-        type: 'system',
-        content: `Uploading "${file.name}"…`,
-        timestamp: new Date()
-      }
-    ]);
+    const uploadMsg = {
+      id: Date.now(),
+      type: 'system' as const,
+      content: `Uploading "${file.name}"…`,
+      timestamp: new Date()
+    };
+    setMessages(m => [...m, uploadMsg]);
 
     try {
       // 1) Send file to /process → returns batch_id with status="enqueued"
@@ -224,29 +418,40 @@ const MedMineChatbot = () => {
       const { batch_id, rows_loaded } = json;
 
       // 2) Notify user
+      const successMsg = {
+        id: Date.now(),
+        type: 'system' as const,
+        content: `✅ ${json.status === 'success' ? 'Processed' : 'Enqueued'} batch ${batch_id}: ${rows_loaded} rows. Data is now searchable!`,
+        timestamp: new Date()
+      };
+      
       setMessages(m => {
         const withoutUploading = m.slice(0, -1);
-        const verb = json.status === 'success' ? 'Processed' : 'Enqueued';
-        return [
-          ...withoutUploading,
-          {
-            id: Date.now(),
-            type: 'system',
-            content: `✅ ${verb} batch ${batch_id}: ${rows_loaded} rows. Data is now searchable!`,
-            timestamp: new Date()
-          }
-        ];
+        return [...withoutUploading, successMsg];
+      });
+      
+      // 保存成功消息到数据库
+      await saveMessageToDb(chatId, successMsg);
+      
+      // 更新文件信息
+      await fetch(`${API_BASE}/cosmos/chats/${chatId}/file-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: file.name,
+          batch_id: batch_id,
+          rows_loaded: rows_loaded,
+          uploaded_at: new Date().toISOString()
+        })
       });
 
       setCurrentBatch(batch_id);
       setTotalRows(rows_loaded);
 
-      // 3) REMOVED: Don't try to fetch cosmos data since we don't have that endpoint
-      // Instead, create a simple file preview from the original file if it's CSV
+      // 3) Create a simple file preview from the original file if it's CSV
       if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
         try {
           const text = await file.text();
-          // Detect delimiter - tab for your sample data
           const delimiter = text.includes('\t') ? '\t' : ',';
           const lines = text.split('\n').slice(0, 4);
           const headers = lines[0]?.split(delimiter) || [];
@@ -268,38 +473,45 @@ const MedMineChatbot = () => {
 
     } catch (err) {
       console.error(err);
+      const errorMsg = {
+        id: Date.now(),
+        type: 'system' as const,
+        content: `❌ Failed to process "${file.name}": ${err instanceof Error ? err.message : err}`,
+        timestamp: new Date()
+      };
+      
       setMessages(m => {
         const withoutUploading = m.slice(0, -1);
-        return [
-          ...withoutUploading,
-          {
-            id: Date.now(),
-            type: 'system',
-            content: `❌ Failed to process "${file.name}": ${err instanceof Error ? err.message : err}`,
-            timestamp: new Date()
-          }
-        ];
+        return [...withoutUploading, errorMsg];
       });
+      
+      // 保存错误消息到数据库
+      await saveMessageToDb(chatId, errorMsg);
+      
       setUploadedFile(null);
       setFileData(null);
       setShowFilePreview(false);
+      
+      // Clear the input value after error
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
   // New vector search functionality
-    interface NormalizedSearchResult {
+  interface NormalizedSearchResult {
     id: string;
     TransactionID: string;
     ItemDesc: string;
     Vendor: string;
     TotalSpend: number;
     similarity: number;
-    [key: string]: any; // Allow additional dynamic properties
+    [key: string]: any;
   }
 
   const handleVectorSearch = async (query: string) => {
     try {
-      // 1. Make the API request
       const response = await fetch(
         `${API_BASE}/search/vector-search?q=${encodeURIComponent(query)}&top_k=10`
       );
@@ -308,11 +520,9 @@ const MedMineChatbot = () => {
         throw new Error(`Search failed with status ${response.status}`);
       }
       
-      // 2. Process and normalize the results
       const rawResults = await response.json();
       
       const normalizedResults: NormalizedSearchResult[] = rawResults.map((result: any) => {
-        // Extract from either root level or metadata object
         const metadata = result.metadata || {};
         return {
           id: result.id,
@@ -321,83 +531,103 @@ const MedMineChatbot = () => {
           Vendor: result.Vendor || result.vendor || metadata.Vendor || '',
           TotalSpend: result.TotalSpend || result.total_spend || metadata.TotalSpend || 0,
           similarity: result.similarity || result["@search.score"] || 0,
-          // Include all original fields
           ...result
         };
       });
 
-      // 3. Update state with normalized results
       setSearchResults(normalizedResults);
       setShowSearchResults(true);
       
-      // 4. Add system message with sources
-      setMessages(prev => [
-        ...prev,
-        {
-          id: Date.now(),
-          type: 'system' as const,
-          content: `Found ${normalizedResults.length} items matching "${query}"`,
-          timestamp: new Date(),
-          sources: normalizedResults.slice(0, 3).map((r: NormalizedSearchResult) => ({
-            source: 'azure_search',
-            ItemDesc: r.ItemDesc,
-            Vendor: r.Vendor,
-            TotalSpend: r.TotalSpend,
-            similarity: r.similarity
-          }))
-        }
-      ]);
+      const searchMsg: Message = {
+        id: Date.now(),
+        type: 'system',
+        content: `Found ${normalizedResults.length} items matching "${query}"`,
+        timestamp: new Date(),
+        context: undefined,
+        suggestions: [],
+        sources: normalizedResults.slice(0, 3).map((r: NormalizedSearchResult) => ({
+          source: 'azure_search',
+          ItemDesc: r.ItemDesc,
+          Vendor: r.Vendor,
+          TotalSpend: r.TotalSpend,
+          similarity: r.similarity
+        }))
+      };
+
+      setMessages(prev => [...prev, searchMsg]);
+
+      if (currentChatId) {
+        await saveMessageToDb(currentChatId, searchMsg);
+      }
       
     } catch (err) {
       console.error("Vector search error:", err);
       
-      // 5. Error handling with user-friendly message
       const errorMessage = err instanceof Error ? err.message : 'Unknown search error';
       
-      setMessages(prev => [
-        ...prev,
-        {
-          id: Date.now(),
-          type: 'system' as const,
-          content: `Search failed: ${errorMessage}`,
-          timestamp: new Date()
-        }
-      ]);
+      const errorMsg: Message = {
+        id: Date.now(),
+        type: 'system',
+        content: `Search failed: ${errorMessage}`,
+        timestamp: new Date()
+      };
       
-      // Optional: Clear previous results on error
+      setMessages(prev => [...prev, errorMsg]);
+      
+      if (currentChatId) {
+        await saveMessageToDb(currentChatId, {
+          type: 'system',
+          content: `Search failed: ${errorMessage}`,
+          context: null,
+          suggestions: [],
+          sources: []
+        });
+      }
+      
       setSearchResults([]);
       setShowSearchResults(false);
     }
   };
 
-  
-
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
+    
+    let chatId = currentChatId;
+    if (!chatId) {
+      chatId = await createNewChatSession();
+      if (!chatId) {
+        console.error('Failed to create chat session');
+        return;
+      }
+    }
 
-    // 1️⃣ Add the user's message to chat
     const userMsg: Message = {
       id: Date.now(),
       type: 'user',
       content: inputValue,
       timestamp: new Date(),
     };
+    
+    // Add user message to UI immediately
     setMessages(prev => [...prev, userMsg]);
     
     const currentInput = inputValue;
     setInputValue('');
     setIsLoading(true);
 
-    // Check for special commands
-    if (currentInput.startsWith("/search ")) {
-      const query = currentInput.substring(8).trim();
-      await handleVectorSearch(query);
-      setIsLoading(false);
-      return;
-    }
-
     try {
-      // 2️⃣ Build payload (with optional CSV)
+      // Save user message to database
+      await saveMessageToDb(chatId, userMsg);
+      
+      // Check for special commands
+      if (currentInput.startsWith("/search ")) {
+        const query = currentInput.substring(8).trim();
+        await handleVectorSearch(query);
+        setIsLoading(false);
+        return;
+      }
+
+      // Prepare and send chat request
       const payload = {
         message: currentInput,
         session_id: sessionId,
@@ -411,7 +641,6 @@ const MedMineChatbot = () => {
           : null,
       };
 
-      // 3️⃣ Call your chat endpoint
       const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -425,7 +654,6 @@ const MedMineChatbot = () => {
 
       const { response: aiText, suggestions, context, sources }: ChatResponse = await response.json();
 
-      // 4️⃣ Build the assistant's message
       const aiMsg: Message = {
         id: Date.now() + 1,
         type: 'assistant',
@@ -436,19 +664,36 @@ const MedMineChatbot = () => {
         sources
       };
 
+      // Add AI message to UI
       setMessages(prev => [...prev, aiMsg]);
+      
+      // Save AI message to database
+      await saveMessageToDb(chatId, aiMsg);
+      
+      // Refresh chat history
+      fetchChatHistory();
+      
     } catch (err) {
       console.error('Chat API Error:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
-      setMessages(prev => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          type: 'assistant',
-          content: `⚠️ Error: ${errorMessage}`,
-          timestamp: new Date(),
-        },
-      ]);
+      
+      const errorMsg: Message = {
+        id: Date.now() + 1,
+        type: 'assistant',
+        content: `⚠️ Error: ${errorMessage}`,
+        timestamp: new Date(),
+      };
+      
+      setMessages(prev => [...prev, errorMsg]);
+      
+      // Save error message to database
+      await saveMessageToDb(chatId, {
+        type: 'assistant',
+        content: `⚠️ Error: ${errorMessage}`,
+        context: null,
+        suggestions: [],
+        sources: []
+      });
     } finally {
       setIsLoading(false);
     }
@@ -560,16 +805,6 @@ const MedMineChatbot = () => {
       cursor: 'pointer',
       marginTop: '4px'
     },
-    refreshButton: {
-      marginTop: '8px',
-      padding: '8px 12px',
-      backgroundColor: '#2563eb',
-      color: 'white',
-      border: 'none',
-      borderRadius: '6px',
-      cursor: 'pointer',
-      fontSize: '12px'
-    },
     previewSection: {
       padding: '16px',
       borderBottom: '1px solid #e5e7eb',
@@ -616,22 +851,44 @@ const MedMineChatbot = () => {
       borderBottom: '1px solid #f3f4f6',
       color: '#111827',
     },
-    suggestionsSection: {
+    chatHistorySection: {
       padding: '16px',
       flex: 1
     },
-    suggestionsTitle: {
+    chatHistoryTitle: {
       fontWeight: '500',
       color: '#111827',
       marginBottom: '12px',
       fontSize: '14px'
     },
-    suggestion: {
+    newChatButton: {
+      width: '100%',
+      marginBottom: '12px',
+      padding: '10px',
+      fontSize: '14px',
+      fontWeight: '500',
+      color: '#2563eb',
+      backgroundColor: '#eff6ff',
+      border: '1px solid #dbeafe',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      transition: 'background-color 0.2s'
+    },
+    chatHistoryList: {
+      overflowY: 'auto',
+      maxHeight: 'calc(100vh - 450px)'
+    },
+    chatHistoryItem: {
       width: '100%',
       textAlign: 'left',
-      padding: '8px',
-      fontSize: '14px',
-      color: '#6b7280',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '4px',
+      padding: '12px',
+      borderBottom: '1px solid #e5e7eb',
       backgroundColor: 'transparent',
       border: 'none',
       borderRadius: '8px',
@@ -639,8 +896,27 @@ const MedMineChatbot = () => {
       marginBottom: '8px',
       transition: 'background-color 0.2s'
     },
-    suggestionHover: {
-      backgroundColor: '#f3f4f6'
+    chatHistoryItemActive: {
+      backgroundColor: '#eff6ff',
+      border: '1px solid #dbeafe'
+    },
+    chatHistoryItemTitle: {
+      fontSize: '14px',
+      fontWeight: '500',
+      color: '#111827',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    chatHistoryItemMeta: {
+      fontSize: '12px',
+      color: '#6b7280'
+    },
+    noChatHistory: {
+      fontSize: '14px',
+      color: '#6b7280',
+      textAlign: 'center',
+      padding: '20px'
     },
     searchCommands: {
       marginTop: '16px',
@@ -963,7 +1239,7 @@ const MedMineChatbot = () => {
               <Icons.Bot />
             </div>
             <div>
-              <h1 style={styles.title}>Earl</h1>
+              <h1 style={styles.title}>EARL</h1>
               <p style={styles.subtitle}>MedMine AI Assistant</p>
             </div>
           </div>
@@ -1001,7 +1277,6 @@ const MedMineChatbot = () => {
               >
                 {showFilePreview ? 'Hide' : 'Show'} Preview
               </button>
-              
             </div>
           )}
         </div>
@@ -1024,7 +1299,7 @@ const MedMineChatbot = () => {
                   <tr>
                     {fileData && fileData.length > 0 && Object.keys(fileData[0])
                       .filter(key => key !== 'id')
-                      .slice(0, 4) // Show first 4 columns
+                      .slice(0, 4)
                       .map((key) => (
                         <th key={key} style={styles.th}>
                           {key.charAt(0).toUpperCase() + key.slice(1)}
@@ -1056,25 +1331,92 @@ const MedMineChatbot = () => {
           </div>
         )}
 
-        {/* Suggestions Section */}
-        <div style={styles.suggestionsSection}>
-          <h3 style={styles.suggestionsTitle}>Quick Questions</h3>
-          <div>
-            {querySuggestions.map((suggestion, index) => (
-              <button
-                key={index}
-                onClick={() => handleSuggestionClick(suggestion)}
-                style={styles.suggestion}
-                onMouseEnter={(e) => {
-                  (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
-                }}
-                onMouseLeave={(e) => {
-                  (e.target as HTMLButtonElement).style.backgroundColor = 'transparent';
-                }}
-              >
-                {suggestion}
-              </button>
-            ))}
+        {/* Chat History Section */}
+        <div style={styles.chatHistorySection}>
+          <h3 style={styles.chatHistoryTitle}>Chat History</h3>
+          <button
+            onClick={createNewChat}
+            style={styles.newChatButton}
+            onMouseEnter={(e) => {
+              (e.target as HTMLButtonElement).style.backgroundColor = '#dbeafe';
+            }}
+            onMouseLeave={(e) => {
+              (e.target as HTMLButtonElement).style.backgroundColor = '#eff6ff';
+            }}
+          >
+            + New Chat
+          </button>
+          <div style={styles.chatHistoryList}>
+            {chatHistory.length > 0 ? (
+              chatHistory.map((chat) => {
+                const isActive = chat.id === currentChatId;
+                return (
+                  <div
+                    key={chat.id}
+                    style={{
+                      ...styles.chatHistoryItem,
+                      ...(isActive ? { backgroundColor: '#eff6ff', border: '1px solid #dbeafe' } : {})
+                    }}
+                    onClick={() => loadChatSession(chat.id)}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      }
+                      const deleteBtn = e.currentTarget.querySelector('.delete-btn');
+                      if (deleteBtn) (deleteBtn as HTMLElement).style.opacity = '1';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }
+                      const deleteBtn = e.currentTarget.querySelector('.delete-btn');
+                      if (deleteBtn) (deleteBtn as HTMLElement).style.opacity = '0';
+                    }}
+                  >
+                    <div style={styles.chatHistoryItemTitle}>
+                      {chat.title || 'Untitled Chat'}
+                    </div>
+                    <div style={styles.chatHistoryItemMeta}>
+                      {new Date(chat.created_at).toLocaleDateString()} - {chat.message_count} messages
+                    </div>
+                    <button
+                      className="delete-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteChatSession(chat.id);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: '12px',
+                        right: '12px',
+                        padding: '4px',
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        color: '#6b7280',
+                        cursor: 'pointer',
+                        borderRadius: '4px',
+                        opacity: 0,
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#fee2e2';
+                        e.currentTarget.style.color = '#dc2626';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        e.currentTarget.style.color = '#6b7280';
+                      }}
+                    >
+                      <Icons.Trash />
+                    </button>
+                  </div>
+                );
+              })
+            ) : (
+              <p style={styles.noChatHistory}>
+                No chat history yet
+              </p>
+            )}
           </div>
           
           {/* Search Commands Info */}
@@ -1095,12 +1437,13 @@ const MedMineChatbot = () => {
           <div style={styles.chatHeaderContent}>
             <div>
               <h2 style={styles.chatTitle}>Purchase Order Analysis</h2>
-              <p style={styles.chatSubtitle}>Ask Earl about your procurement data</p>
+              <p style={styles.chatSubtitle}>Ask EARL about your procurement data</p>
             </div>
             <div style={styles.chatActions}>
               <button
                 onClick={() => setShowSearchResults(!showSearchResults)}
                 style={styles.actionButton}
+                title="Toggle search results"
                 onMouseEnter={(e) => {
                   (e.target as HTMLButtonElement).style.color = '#374151';
                   (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
@@ -1113,7 +1456,9 @@ const MedMineChatbot = () => {
                 <Icons.Search />
               </button>
               <button
+                onClick={downloadChat}
                 style={styles.actionButton}
+                title="Download chat history"
                 onMouseEnter={(e) => {
                   (e.target as HTMLButtonElement).style.color = '#374151';
                   (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
@@ -1124,19 +1469,6 @@ const MedMineChatbot = () => {
                 }}
               >
                 <Icons.Download />
-              </button>
-              <button
-                style={styles.actionButton}
-                onMouseEnter={(e) => {
-                  (e.target as HTMLButtonElement).style.color = '#374151';
-                  (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
-                }}
-                onMouseLeave={(e) => {
-                  (e.target as HTMLButtonElement).style.color = '#6b7280';
-                  (e.target as HTMLButtonElement).style.backgroundColor = 'transparent';
-                }}
-              >
-                <Icons.Settings />
               </button>
             </div>
           </div>
@@ -1239,7 +1571,7 @@ const MedMineChatbot = () => {
                     <div style={styles.spinner}>
                       <Icons.Loader />
                     </div>
-                    <p style={{...styles.messageText, color: '#6b7280'}}>Earl is analyzing...</p>
+                    <p style={{...styles.messageText, color: '#6b7280'}}>EARL is analyzing...</p>
                   </div>
                 </div>
               </div>
@@ -1256,7 +1588,7 @@ const MedMineChatbot = () => {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Ask Earl about your purchase data or type /search to find specific items..."
+                placeholder="Ask EARL about your purchase data or type /search to find specific items..."
                 style={styles.textarea}
                 rows={3}
                 disabled={isLoading}
@@ -1288,12 +1620,12 @@ const MedMineChatbot = () => {
                 }
               }}
             >
-              <span>Ask Earl</span>
+              <span>Ask EARL</span>
               <Icons.Send />
             </button>
           </div>
           <p style={styles.disclaimer}>
-            Earl can analyze your procurement data, compare vendors, and provide spending insights. Use /search for vector search.
+            EARL can analyze your procurement data, compare vendors, and provide spending insights. Use /search for vector search.
           </p>
         </div>
       </div>
