@@ -168,21 +168,49 @@ const MedMineChatbot = () => {
   });
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [isSavingMessage, setIsSavingMessage] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
+  const initializedRef = useRef(false);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const initializeChat = async () => {
+      if (initializedRef.current) return;
+      initializedRef.current = true;
+      
+      setIsInitializing(true);
+      
+      try {
+        // First fetch existing chat history
+        const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}`);
+        if (response.ok) {
+          const data = await response.json();
+          const chats = data.chats || [];
+          setChatHistory(chats);
+          
+          // Only create a new chat if there's no history
+          if (chats.length === 0) {
+            const newChatId = await createNewChatSession();
+            if (newChatId) {
+              setCurrentChatId(newChatId);
+            }
+          } else {
+            console.log('Found existing chats:', chats.length);
+          }
+        } else {
+          // If fetching fails, try to create a new session
+          const newChatId = await createNewChatSession();
+          if (newChatId) {
+            setCurrentChatId(newChatId);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to initialize chat:', error);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
 
-  // Fetch chat history on component mount
-  useEffect(() => {
-    fetchChatHistory();
+    initializeChat();
   }, []);
-
-  useEffect(() => {
-    if (!currentChatId && chatHistory.length === 0) {
-      createNewChatSession();
-    }
-  }, [chatHistory]);
 
   const fetchChatHistory = async () => {
     try {
@@ -204,9 +232,6 @@ const MedMineChatbot = () => {
       if (response.ok) {
         const data = await response.json();
         setCurrentChatId(data.chat_id);
-        
-        
-        fetchChatHistory();
         return data.chat_id;
       }
     } catch (error) {
@@ -255,7 +280,6 @@ const MedMineChatbot = () => {
       if (response.ok) {
         const data = await response.json();
         
-        // 转换消息格式
         const uiMessages = data.messages.map((msg: any, index: number) => ({
           id: index + 1,
           type: msg.type,
@@ -286,6 +310,10 @@ const MedMineChatbot = () => {
   };
 
   const createNewChat = async () => {
+    if (isInitializing) {
+      console.log('Still initializing, skipping new chat creation');
+      return;
+    }
     const newChatId = await createNewChatSession();
     if (newChatId) {
       setMessages([{
@@ -307,7 +335,7 @@ const MedMineChatbot = () => {
         fileInputRef.current.value = '';
       }
       
-      fetchChatHistory();
+      await fetchChatHistory();
     }
   };
 
@@ -357,7 +385,6 @@ const MedMineChatbot = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    // 确保有聊天会话
     let chatId = currentChatId;
     if (!chatId) {
       chatId = await createNewChatSession();
@@ -379,7 +406,6 @@ const MedMineChatbot = () => {
       };
       setMessages(m => [...m, errorMsg]);
       
-      // 保存错误消息到数据库
       await saveMessageToDb(chatId, errorMsg);
       
       // Clear the input value after showing error
@@ -430,10 +456,8 @@ const MedMineChatbot = () => {
         return [...withoutUploading, successMsg];
       });
       
-      // 保存成功消息到数据库
       await saveMessageToDb(chatId, successMsg);
       
-      // 更新文件信息
       await fetch(`${API_BASE}/cosmos/chats/${chatId}/file-info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -485,7 +509,6 @@ const MedMineChatbot = () => {
         return [...withoutUploading, errorMsg];
       });
       
-      // 保存错误消息到数据库
       await saveMessageToDb(chatId, errorMsg);
       
       setUploadedFile(null);
