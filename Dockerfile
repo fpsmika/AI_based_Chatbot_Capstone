@@ -3,11 +3,14 @@ FROM python:3.10-slim-bullseye
 
 EXPOSE 8000
 
-# Install ONLY runtime dependencies (no build tools)
+# Install Microsoft ODBC Driver 18 for SQL Server
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    unixodbc \  
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y curl gnupg apt-transport-https && \
+    curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
+    curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
+    apt-get update && \
+    ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc unixodbc-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 # Python optimizations
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -24,11 +27,7 @@ WORKDIR /app
 COPY . /app
 
 # Creates a non-root user with an explicit UID and adds permission to access the /app folder
-# For more info, please refer to https://aka.ms/vscode-docker-python-configure-containers
 RUN adduser -u 5678 --disabled-password --gecos "" appuser && chown -R appuser /app
 USER appuser
-
-# During debugging, this entry point will be overridden. For more information, please refer to https://aka.ms/vscode-docker-python-debug
-
 
 CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "120", "-k", "uvicorn.workers.UvicornWorker", "app.main:app"]
