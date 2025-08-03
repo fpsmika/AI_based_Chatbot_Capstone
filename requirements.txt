@@ -12,6 +12,7 @@ python-dotenv==1.0.0
 # === Azure Services ===
 azure-storage-blob==12.16.0  # Pinned for stability
 azure-cosmos==4.5.0
+azure-search-documents==11.4.0
 
 # === AI/Embeddings ===
 sentence-transformers==2.2.2

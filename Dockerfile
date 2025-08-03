@@ -3,21 +3,26 @@ FROM python:3.10-slim-bullseye
 
 EXPOSE 8000
 
-# Install Microsoft ODBC Driver 18 for SQL Server
-RUN apt-get update && \
-    apt-get install -y curl gnupg apt-transport-https && \
-    curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - && \
-    curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list && \
-    apt-get update && \
-    ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc unixodbc-dev && \
-    rm -rf /var/lib/apt/lists/*
-
+# Install ONLY runtime dependencies (no build tools)
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    apt-transport-https \
+    unixodbc \
+    unixodbc-dev \
+    && curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
+    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 # Python optimizations
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
+
 
 # Install dependencies first for layer caching
 COPY requirements.txt .
