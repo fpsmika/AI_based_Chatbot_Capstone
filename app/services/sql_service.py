@@ -433,6 +433,58 @@ class SQLService:
             logger.error(f"Failed to get records by batch: {e}")
             raise
     
+    def test_chat_tables(self) -> Dict[str, Any]:
+        """Test chat history tables specifically"""
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Check if chat tables exist
+                cursor.execute("""
+                    SELECT TABLE_NAME
+                    FROM INFORMATION_SCHEMA.TABLES 
+                    WHERE TABLE_NAME IN ('chat_sessions', 'chat_messages')
+                """)
+                existing_tables = [row[0] for row in cursor.fetchall()]
+                
+                # Test basic operations if tables exist
+                test_results = {
+                    "chat_sessions_exists": "chat_sessions" in existing_tables,
+                    "chat_messages_exists": "chat_messages" in existing_tables,
+                    "can_read": False,
+                    "can_write": False
+                }
+                
+                if test_results["chat_sessions_exists"]:
+                    # Test read
+                    cursor.execute("SELECT COUNT(*) FROM chat_sessions")
+                    count = cursor.fetchone()[0]
+                    test_results["can_read"] = True
+                    test_results["chat_sessions_count"] = count
+                    
+                    # Test write with a dummy record
+                    test_chat_id = f"test-{uuid4()}"
+                    try:
+                        cursor.execute("""
+                            INSERT INTO chat_sessions (chat_id, session_id, title)
+                            VALUES (?, 'test-session', 'Test Chat')
+                        """, (test_chat_id,))
+                        
+                        # Clean up test record
+                        cursor.execute("DELETE FROM chat_sessions WHERE chat_id = ?", (test_chat_id,))
+                        conn.commit()
+                        test_results["can_write"] = True
+                    except Exception as write_error:
+                        test_results["write_error"] = str(write_error)
+                        conn.rollback()
+                
+                cursor.close()
+                return test_results
+                
+        except Exception as e:
+            logger.error(f"Chat tables test failed: {e}")
+            return {"error": str(e)}
+
     def _normalize_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Convert special types to SQL-compatible formats"""
         normalized = record.copy()

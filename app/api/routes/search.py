@@ -356,3 +356,127 @@ async def search_health():
             "status": "unhealthy",
             "error": str(e)
         }
+
+@router.get("/index/analysis")
+async def analyze_search_index():
+    """Analyze the current search index coverage and capabilities"""
+    try:
+        ai_search = get_ai_search_service()
+        analysis = ai_search.analyze_index_coverage()
+        
+        # Add recommendations based on analysis
+        recommendations = []
+        
+        field_coverage = analysis.get("field_coverage", {})
+        for field, stats in field_coverage.items():
+            if stats["count"] > 0:
+                data_percentage = (stats["has_data"] / stats["count"]) * 100
+                if data_percentage < 50:
+                    recommendations.append(f"Field '{field}' has low data quality ({data_percentage:.1f}% populated)")
+        
+        regions_count = analysis.get("regions_count", 0)
+        if regions_count == 0:
+            recommendations.append("No regions found - this may indicate data quality issues")
+        elif regions_count < 3:
+            recommendations.append(f"Only {regions_count} regions found - consider data completeness")
+        
+        analysis["recommendations"] = recommendations
+        analysis["can_answer_region_questions"] = regions_count > 0
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Index analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Index analysis failed: {e}")
+
+@router.get("/consistency/check/{transaction_id}")
+async def check_transaction_consistency(transaction_id: str):
+    """Check data consistency between AI Search and SQL for a specific transaction"""
+    try:
+        ai_search = get_ai_search_service()
+        consistency_report = ai_search.check_data_consistency(transaction_id)
+        
+        return {
+            "transaction_id": transaction_id,
+            "consistency_report": consistency_report,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Consistency check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Consistency check failed: {e}")
+
+@router.post("/consistency/sync/{transaction_id}")
+async def sync_transaction_data(transaction_id: str):
+    """Sync transaction data from SQL to AI Search"""
+    try:
+        ai_search = get_ai_search_service()
+        sync_result = ai_search.sync_transaction_with_sql(transaction_id)
+        
+        return {
+            "transaction_id": transaction_id,
+            "sync_result": sync_result,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Transaction sync failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Transaction sync failed: {e}")
+
+@router.get("/consistency/batch-check")
+async def batch_consistency_check(
+    sample_size: int = Query(10, ge=1, le=100),
+    batch_id: str = Query(None, description="Check specific batch")
+):
+    """Check data consistency for a sample of transactions"""
+    try:
+        from app.services.sql_service import get_sql_service
+        sql_service = get_sql_service()
+        
+        # Get sample transactions
+        if batch_id:
+            sql_query = f"""
+                SELECT TOP {sample_size} TransactionID
+                FROM supply_records 
+                WHERE batch_id = ?
+                ORDER BY NEWID()
+            """
+            params = [{"name": "?", "value": batch_id}]
+        else:
+            sql_query = f"""
+                SELECT TOP {sample_size} TransactionID
+                FROM supply_records 
+                ORDER BY NEWID()
+            """
+            params = None
+        
+        transactions = sql_service.query_items(sql_query, params)
+        
+        ai_search = get_ai_search_service()
+        consistency_results = []
+        
+        for transaction in transactions:
+            transaction_id = transaction["TransactionID"]
+            result = ai_search.check_data_consistency(str(transaction_id))
+            consistency_results.append(result)
+        
+        # Calculate summary stats
+        total_checked = len(consistency_results)
+        consistent_count = sum(1 for r in consistency_results if r.get("consistent", False))
+        inconsistent_count = total_checked - consistent_count
+        
+        return {
+            "summary": {
+                "total_checked": total_checked,
+                "consistent": consistent_count,
+                "inconsistent": inconsistent_count,
+                "consistency_rate": (consistent_count / total_checked) * 100 if total_checked > 0 else 0
+            },
+            "details": consistency_results,
+            "batch_id": batch_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Batch consistency check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Batch consistency check failed: {e}")

@@ -41,9 +41,9 @@ class Settings(BaseSettings):
     AZURE_STORAGE_CONNECTION_STRING: str = ""
     BLOB_CONTAINER_NAME: str = "raw-upload"
     
-    # Azure AI Search (matching your .env) - FIXED: Added missing AZURE_SEARCH_ENDPOINT
+    # Azure AI Search (matching your .env) - FIXED: Use single index for everything
     AZURE_SEARCH_SERVICE_NAME: str = ""
-    AZURE_SEARCH_ENDPOINT: str = ""  # <-- ADD THIS LINE
+    AZURE_SEARCH_ENDPOINT: str = ""
     AZURE_SEARCH_API_KEY: str = ""
     AZURE_SEARCH_INDEX_NAME: str = "chatbot-index-1"
     
