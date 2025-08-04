@@ -58,6 +58,39 @@ def _format_search_results(results: List[Dict]) -> str:
     if not results:
         return "No matching records found."
     
+    if results[0].get("source") == "sql_top_products":
+        lines = ["Top products by total spend:"]
+        for i, r in enumerate(results, 1):
+            item_desc = r.get("ItemDesc", "Unnamed Product")
+            total_spend = float(r.get("TotalSpend", 0))
+            lines.append(f"{i}. {item_desc} — ${total_spend:,.2f}")
+        return "\n".join(lines)
+
+    if results[0].get("source") == "sql_vendor_spend":
+        lines = ["Total spend by vendor:"]
+        for i, r in enumerate(results, 1):
+            vendor = r.get("Vendor", "Unknown")
+            spend = float(r.get("TotalSpend", 0))
+            lines.append(f"{i}. {vendor} — ${spend:,.2f}")
+        return "\n".join(lines)
+
+    if results[0].get("source") == "sql_single_vendor":
+        vendor = results[0].get("Vendor", "Vendor")
+        spend = float(results[0].get("TotalSpend", 0))
+        return f"Total spend for {vendor}: ${spend:,.2f}"
+
+    if results[0].get("source") == "sql_recent_transaction":
+        r = results[0]
+        return (
+            f"Most recent transaction:\n"
+            f"- Date: {r.get('LoadDate', 'Unknown')}\n"
+            f"- Item: {r.get('ItemDesc', 'Unknown')}\n"
+            f"- Vendor: {r.get('Vendor', 'Unknown')}\n"
+            f"- Spend: ${r.get('TotalSpend', 0):,.2f}\n"
+            f"- Department: {r.get('Department', 'Unknown')}"
+        )
+
+
     # Special handling for count/summary queries
     if len(results) == 1 and results[0].get('source') == 'sql_count':
         result = results[0]
@@ -152,10 +185,17 @@ def _analyze_csv_data(csv_data: CSVData) -> str:
     analysis.append(f"Columns: {', '.join(csv_data.headers)}")
     
     # Calculate total spend if available
+    def safe_float(val):
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
     spend_keys = [k for k in csv_data.headers if 'spend' in k.lower()]
     if spend_keys:
-        total = sum(float(row.get(spend_keys[0], 0)) for row in csv_data.data)
+        total = sum(safe_float(row.get(spend_keys[0])) for row in csv_data.data)
         analysis.append(f"Total spend: ${total:,.2f}")
+
     
     # Get unique vendors if available
     vendor_keys = [k for k in csv_data.headers if 'vendor' in k.lower()]
@@ -169,7 +209,22 @@ async def _get_search_results(query: str) -> List[Dict]:
     """Get hybrid search results with improved deduplication for manufacturer queries"""
     try:
         logger.info(f"Getting search results for query: '{query}'")
-        
+
+        vendor_match = _is_single_vendor_spend_query(query)
+        if vendor_match:
+            return await _get_spend_for_vendor(vendor_match)
+
+        if _is_most_recent_transaction_query(query):
+            return await _get_most_recent_transaction()
+
+
+        if _is_top_products_query(query):
+            return await _get_top_products_by_spend(query)
+
+        if _is_vendor_spend_query(query):
+            return await _get_total_spend_per_vendor()
+
+
         # ADDED: Check if query is asking for record count
         if _is_count_query(query):
             return await _get_transaction_count()
@@ -506,6 +561,7 @@ async def chat_endpoint(
     if not has_any_data:
         return await _handle_empty_state(request)
 
+    
     # =================================================================
     # 3. Get Conversation Context (ENHANCED)
     # =================================================================
@@ -575,10 +631,17 @@ async def chat_endpoint(
             })
 
         # 4B. Get search results (if available)
+       # 4B. Get search results (if available)
         search_results = await _get_search_results(request.message)
+
+        # ✅ If it's a top-N SQL result, add context BEFORE formatting
+        if search_results and search_results[0].get("source") == "sql_top_products":
+            context_parts.append("This result is based on a verified SQL query ranking items by total spend.")
+
         if search_results:
             context_parts.append(_format_search_results(search_results))
             sources.extend([{"source": r.get("source", "database"), **r} for r in search_results])
+
 
         # 4C. Process CSV data (if provided)
         if request.csv_data and request.csv_data.row_count > 0:
@@ -686,6 +749,151 @@ async def chat_endpoint(
             suggestions=["Try rephrasing your question", "Check your data format"],
             session_id=request.session_id
         )
+
+
+def _is_most_recent_transaction_query(query: str) -> bool:
+    """
+    Detects if the user is asking for the most recent transaction.
+    """
+    q = query.lower()
+    return "most recent" in q and "transaction" in q
+
+async def _get_most_recent_transaction() -> List[Dict[str, Any]]:
+    sql_service = get_sql_service()
+    sql = """
+        SELECT TOP 1 *
+        FROM supply_records
+        ORDER BY LoadDate DESC
+    """
+    rows = sql_service.query_items(sql)
+    
+    if not rows:
+        return []
+
+    row = rows[0]
+    return [{
+        "TransactionID": str(row.get("TransactionID", "")),
+        "ItemDesc": str(row.get("ItemDesc", "")),
+        "Vendor": str(row.get("Vendor", "")),
+        "Region": str(row.get("Region", "")),
+        "FacilityType": str(row.get("FacilityType", "")),
+        "Department": str(row.get("Department", "")),
+        "Category": str(row.get("Category", "")),
+        "TotalSpend": float(row.get("TotalSpend", 0)),
+        "PricePaid": float(row.get("PricePaid", 0)),
+        "Quantity": int(row.get("Quantity", 0)),
+        "Month": row.get("Month"),
+        "Year": row.get("Year"),
+        "LoadDate": str(row.get("LoadDate", "")),
+        "Manufacturer": str(row.get("Manufacturer", "")),
+        "source": "sql_recent_transaction",
+        "verified": True
+    }]
+
+
+def _is_single_vendor_spend_query(query: str) -> Optional[str]:
+    """
+    If the query mentions spend for a specific vendor, return the vendor name (or partial name).
+    """
+    match = re.search(r"spend\s+(for|by|on)\s+(.*)", query.lower())
+    if match:
+        vendor_name = match.group(2).strip().rstrip("?")
+        if vendor_name and len(vendor_name) > 2:
+            return vendor_name
+    return None
+
+async def _get_spend_for_vendor(vendor_name: str) -> List[Dict[str, Any]]:
+    sql_service = get_sql_service()
+    sql = """
+        SELECT Vendor, SUM(TotalSpend) as total_spend
+        FROM supply_records
+        WHERE LOWER(Vendor) LIKE ?
+        GROUP BY Vendor
+    """
+    param = [{"name": "?", "value": f"%{vendor_name.lower()}%"}]
+    rows = sql_service.query_items(sql, param)
+    
+    results = []
+    for row in rows:
+        results.append({
+            "Vendor": row.get("Vendor", vendor_name),
+            "TotalSpend": float(row.get("total_spend", 0)),
+            "source": "sql_single_vendor"
+        })
+    return results
+
+
+def _is_vendor_spend_query(query: str) -> bool:
+    """
+    Detect queries asking for total spend per vendor
+    """
+    q = query.lower()
+    return (
+        "spend" in q and "vendor" in q and
+        any(word in q for word in ["per", "by", "each", "breakdown"])
+    )
+
+async def _get_total_spend_per_vendor() -> List[Dict[str, Any]]:
+    sql_service = get_sql_service()
+    sql = """
+        SELECT Vendor, SUM(TotalSpend) AS total_spend
+        FROM supply_records
+        GROUP BY Vendor
+        ORDER BY total_spend DESC
+    """
+    rows = sql_service.query_items(sql)
+    return [
+        {
+            "Vendor": row.get("Vendor", "Unknown Vendor"),
+            "TotalSpend": float(row.get("total_spend", 0)),
+            "source": "sql_vendor_spend"
+        }
+        for row in rows
+    ]
+
+
+def _is_top_products_query(query: str) -> bool:
+    """
+    Detects questions like:
+      - "What are the top 5 products by total spend?"
+      - "Show me the top 3 items by spend"
+    """
+    q = query.lower()
+    # look for "top <number> <products|items>" and "spend|total spend"
+    return bool(
+        re.search(r"(top|most|highest)\s+\d*\s*(products|items)", q) and
+        re.search(r"(spend|total|cost|expensive)", q)
+    )
+
+async def _get_top_products_by_spend(query: str) -> List[Dict[str, Any]]:
+    """
+    Runs a GROUP BY on supply_records to return the top‐N products by summed TotalSpend.
+    Expects the query to contain the desired N.
+    """
+    # extract N from the user’s question (default to 5 if missing)
+    import re
+    match = re.search(r"top\s+(\d+)", query.lower())
+    top_n = int(match.group(1)) if match else 5
+
+    sql_service = get_sql_service()
+    sql = f"""
+      SELECT TOP {top_n} 
+        ItemDesc, 
+        SUM(TotalSpend) AS total_spend
+      FROM supply_records
+      GROUP BY ItemDesc
+      ORDER BY total_spend DESC
+    """
+    rows = sql_service.query_items(sql)
+    results: List[Dict[str, Any]] = []
+    for r in rows:
+        results.append({
+            "ItemDesc": r.get("ItemDesc", ""),
+            "TotalSpend": float(r.get("total_spend", 0)),
+            "source": "sql_top_products"
+        })
+    return results
+
 
 def _generate_context_aware_suggestions(message: str, conversation_context: Dict[str, Any]) -> List[str]:
     """Generate suggestions based on current message and conversation context"""
