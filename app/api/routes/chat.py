@@ -286,6 +286,7 @@ async def chat_endpoint(
     "Do not use formatting like bold, italics, or markdown symbols in your response."
     "Give straight answers only, no explanations until asked for one"
     "Each point must contain only one peice of information"
+    "When asked for 'top' or 'most', look for numerical fields and sort descending. Always return concise ranked results using bullet points."
     "keep it consise and direct, avoid full paragraphs until specifically mentioned "
     "Do not mix multiple insight types in one sentence. Use bullet points or numbered lists where necessary for clarity.\n"
     "If data is incomplete or unclear, mention that explicitly and suggest what additional information would help improve the analysis.\n"
