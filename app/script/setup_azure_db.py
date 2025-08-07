@@ -94,20 +94,7 @@ def create_missing_tables():
         
         existing_tables = check_existing_schema()
         
-        # Create embeddings table if it doesn't exist (for future use)
-        if 'embeddings' not in existing_tables:
-            logger.info("Creating embeddings table...")
-            cursor.execute("""
-                CREATE TABLE embeddings (
-                    id NVARCHAR(50) PRIMARY KEY,
-                    vector NVARCHAR(MAX) NULL,
-                    metadata NVARCHAR(MAX) NULL,
-                    created_at DATETIME2 DEFAULT GETUTCDATE(),
-                    updated_at DATETIME2 DEFAULT GETUTCDATE()
-                );
-            """)
-            conn.commit()
-            logger.info("✅ Created embeddings table")
+        # Remove embeddings table creation - not needed for text-to-SQL approach
         
         # Verify supply_records table exists (should already exist)
         if 'supply_records' not in existing_tables:

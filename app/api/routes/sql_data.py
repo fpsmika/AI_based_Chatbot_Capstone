@@ -82,6 +82,31 @@ async def get_records_by_batch(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/analytics/general")
+async def get_general_analytics(
+    question: str = Query(..., description="Natural language question about the data")
+):
+    """Get analytics using natural language questions converted to SQL"""
+    try:
+        from app.services.text_to_sql_service import get_text_to_sql_service
+        
+        text_to_sql = get_text_to_sql_service()
+        result = text_to_sql.execute_query_and_get_context(question)
+        
+        if not result["success"]:
+            raise HTTPException(500, detail=result["error"])
+        
+        return {
+            "question": question,
+            "sql_query": result["query_used"],
+            "results": result["results"],
+            "context": result["context"]
+        }
+        
+    except Exception as e:
+        raise HTTPException(500, detail=str(e))
+
+
 # Additional SQL-specific endpoints
 @router.get("/sql/stats")
 async def get_sql_stats():

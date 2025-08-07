@@ -522,96 +522,6 @@ const MedMineChatbot = () => {
     }
   };
 
-  // New vector search functionality
-  interface NormalizedSearchResult {
-    id: string;
-    TransactionID: string;
-    ItemDesc: string;
-    Vendor: string;
-    TotalSpend: number;
-    similarity: number;
-    [key: string]: any;
-  }
-
-  const handleVectorSearch = async (query: string) => {
-    try {
-      const response = await fetch(
-        `${API_BASE}/search/vector-search?q=${encodeURIComponent(query)}&top_k=10`
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Search failed with status ${response.status}`);
-      }
-      
-      const rawResults = await response.json();
-      
-      const normalizedResults: NormalizedSearchResult[] = rawResults.map((result: any) => {
-        const metadata = result.metadata || {};
-        return {
-          id: result.id,
-          TransactionID: result.TransactionID || result.transaction_id || metadata.TransactionID || '',
-          ItemDesc: result.ItemDesc || result.item_desc || metadata.ItemDesc || '',
-          Vendor: result.Vendor || result.vendor || metadata.Vendor || '',
-          TotalSpend: result.TotalSpend || result.total_spend || metadata.TotalSpend || 0,
-          similarity: result.similarity || result["@search.score"] || 0,
-          ...result
-        };
-      });
-
-      setSearchResults(normalizedResults);
-      setShowSearchResults(true);
-      
-      const searchMsg: Message = {
-        id: Date.now(),
-        type: 'system',
-        content: `Found ${normalizedResults.length} items matching "${query}"`,
-        timestamp: new Date(),
-        context: undefined,
-        suggestions: [],
-        sources: normalizedResults.slice(0, 3).map((r: NormalizedSearchResult) => ({
-          source: 'azure_search',
-          ItemDesc: r.ItemDesc,
-          Vendor: r.Vendor,
-          TotalSpend: r.TotalSpend,
-          similarity: r.similarity
-        }))
-      };
-
-      setMessages(prev => [...prev, searchMsg]);
-
-      if (currentChatId) {
-        await saveMessageToDb(currentChatId, searchMsg);
-      }
-      
-    } catch (err) {
-      console.error("Vector search error:", err);
-      
-      const errorMessage = err instanceof Error ? err.message : 'Unknown search error';
-      
-      const errorMsg: Message = {
-        id: Date.now(),
-        type: 'system',
-        content: `Search failed: ${errorMessage}`,
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev, errorMsg]);
-      
-      if (currentChatId) {
-        await saveMessageToDb(currentChatId, {
-          type: 'system',
-          content: `Search failed: ${errorMessage}`,
-          context: null,
-          suggestions: [],
-          sources: []
-        });
-      }
-      
-      setSearchResults([]);
-      setShowSearchResults(false);
-    }
-  };
-
   const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
     
@@ -642,15 +552,7 @@ const MedMineChatbot = () => {
       // Save user message to database
       await saveMessageToDb(chatId, userMsg);
       
-      // Check for special commands
-      if (currentInput.startsWith("/search ")) {
-        const query = currentInput.substring(8).trim();
-        await handleVectorSearch(query);
-        setIsLoading(false);
-        return;
-      }
-
-      // Prepare and send chat request
+      // Send everything directly to chat endpoint (no special commands)
       const payload = {
         message: currentInput,
         session_id: sessionId,
@@ -940,29 +842,6 @@ const MedMineChatbot = () => {
       color: '#6b7280',
       textAlign: 'center',
       padding: '20px'
-    },
-    searchCommands: {
-      marginTop: '16px',
-      padding: '12px',
-      backgroundColor: '#f3f4f6',
-      borderRadius: '8px'
-    },
-    searchCommandsTitle: {
-      fontWeight: '500',
-      color: '#111827',
-      marginBottom: '8px',
-      fontSize: '14px'
-    },
-    searchCommandsText: {
-      fontSize: '12px',
-      color: '#6b7280',
-      lineHeight: '1.4'
-    },
-    codeSpan: {
-      backgroundColor: 'white',
-      padding: '2px 4px',
-      borderRadius: '4px',
-      fontFamily: 'monospace'
     },
     mainArea: {
       flex: 1,
@@ -1441,15 +1320,6 @@ const MedMineChatbot = () => {
               </p>
             )}
           </div>
-          
-          {/* Search Commands Info */}
-          <div style={styles.searchCommands}>
-            <h4 style={styles.searchCommandsTitle}>Search Commands</h4>
-            <div style={styles.searchCommandsText}>
-              <p><span style={styles.codeSpan}>/search [query]</span> - Vector search</p>
-              <p>Example: <span style={styles.codeSpan}>/search gloves</span></p>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -1611,7 +1481,7 @@ const MedMineChatbot = () => {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Ask EARL about your purchase data or type /search to find specific items..."
+                placeholder="Ask EARL anything about your purchase data - vendor analysis, spending patterns, item costs, facility comparisons..."
                 style={styles.textarea}
                 rows={3}
                 disabled={isLoading}
@@ -1648,7 +1518,7 @@ const MedMineChatbot = () => {
             </button>
           </div>
           <p style={styles.disclaimer}>
-            EARL can analyze your procurement data, compare vendors, and provide spending insights. Use /search for vector search.
+            EARL can analyze your procurement data, compare vendors, and provide spending insights using natural language queries.
           </p>
         </div>
       </div>

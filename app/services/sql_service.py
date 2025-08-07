@@ -40,40 +40,46 @@ class SQLService:
     def _get_connection(self, max_retries: int = 3):
         """Create a new database connection with retry logic"""
         connection = None
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Attempting SQL connection (attempt {attempt + 1}/{max_retries})")
-                connection = pyodbc.connect(
-                    self.conn_str,
-                    timeout=30
-                )
-                connection.timeout = 120
-                connection.autocommit = False
-                logger.info("✅ SQL connection established successfully")
-                
-                # Initialize tables if needed
-                if not self._tables_initialized:
-                    self._check_schema(connection)
-                    self._tables_initialized = True
-                
-                yield connection
-                break
-                
-            except Exception as e:
-                logger.error(f"SQL connection attempt {attempt + 1} failed: {e}")
-                if connection:
-                    try:
-                        connection.close()
-                    except:
-                        pass
+        try:
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"Attempting SQL connection (attempt {attempt + 1}/{max_retries})")
+                    connection = pyodbc.connect(
+                        self.conn_str,
+                        timeout=30
+                    )
+                    connection.timeout = 120
+                    connection.autocommit = False
+                    logger.info("✅ SQL connection established successfully")
+                    
+                    # Initialize tables if needed
+                    if not self._tables_initialized:
+                        self._check_schema(connection)
+                        self._tables_initialized = True
+                    
+                    yield connection
+                    return  # Exit after successful yield
+                    
+                except Exception as e:
+                    logger.error(f"SQL connection attempt {attempt + 1} failed: {e}")
+                    if connection:
+                        try:
+                            connection.close()
+                        except:
+                            pass
+                        connection = None
                         
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    logger.info(f"Retrying connection in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                else:
-                    raise e
-        else:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** attempt
+                        logger.info(f"Retrying connection in {wait_time} seconds...")
+                        time.sleep(wait_time)
+                    else:
+                        raise e
+        
+        except Exception as e:
+            logger.error(f"All connection attempts failed: {e}")
+            raise
+        finally:
             if connection:
                 try:
                     connection.close()
@@ -392,19 +398,35 @@ class SQLService:
         """Execute a custom SQL query and return results"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                if params:
-                    # Handle parameterized queries
-                    param_values = [p["value"] for p in params]
-                    cursor.execute(query, param_values)
-                else:
-                    cursor.execute(query)
-                
-                columns = [column[0] for column in cursor.description]
-                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-                cursor.close()
-                return results
+                cursor = None
+                try:
+                    cursor = conn.cursor()
+                    
+                    if params:
+                        # Handle parameterized queries
+                        param_values = [p["value"] for p in params]
+                        cursor.execute(query, param_values)
+                    else:
+                        cursor.execute(query)
+                    
+                    columns = [column[0] for column in cursor.description]
+                    results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                    
+                    logger.info(f"Query executed successfully: {len(results)} rows returned")
+                    return results
+                    
+                except Exception as e:
+                    logger.error(f"Query execution failed: {e}")
+                    logger.error(f"Query was: {query}")
+                    if params:
+                        logger.error(f"Parameters: {params}")
+                    raise
+                finally:
+                    if cursor:
+                        try:
+                            cursor.close()
+                        except:
+                            pass
                 
         except Exception as e:
             logger.error(f"Query failed: {e}")

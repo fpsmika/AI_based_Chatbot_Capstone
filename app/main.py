@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from app.core.logging import setup_logging
@@ -15,7 +15,6 @@ from app.models.transaction import Transaction
 from app.api.routes.chat import router as chat_router
 from app.api.routes.sql_data import router as sql_router
 from app.api.routes.process import router as process_router
-from app.api.routes.search import router as search_router
 from app.api.routes.chat_history import router as chat_history_router
 from fastapi import UploadFile, File
 import os
@@ -56,13 +55,15 @@ async def lifespan(app: FastAPI):
         test_response = LlamaService.query("Hello", max_tokens=10)
         logger.info(f"✅ Llama API connection verified: {test_response[:50]}...")
         
-        # Preload embedding model to avoid timeout during first request
-        logger.info("Loading embedding model...")
-        from app.services.embedding_service import embed_bulk_text
-        embed_bulk_text(["test"])  # This triggers model loading
-        logger.info("✅ Embedding model loaded")
+        # Test SQL Database connection
+        try:
+            sql_service = get_sql_service()
+            sql_test = sql_service.test_connection()
+            logger.info(f"✅ SQL Database connection verified: {sql_test}")
+        except Exception as sql_error:
+            logger.error(f"❌ SQL Database connection failed: {sql_error}")
         
-        logger.info("✅ Cosmos DB connection verified")
+        logger.info("✅ System startup completed")
         
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
@@ -116,12 +117,6 @@ app.include_router(
     process_router,
     prefix="/api/v1",
     tags=["Process"]
-)
-
-app.include_router(
-    search_router,
-    prefix="/api/v1/items",
-    tags=["search"],
 )
 
 app.include_router(
@@ -263,21 +258,29 @@ def get_transactions(
     return query.offset(skip).limit(limit).all()
 
 @app.get("/api/v1/transactions/analytics")
-def get_analytics(
-    start_date: date = None,
-    end_date: date = None,
+async def get_analytics(
+    question: str = Query("Show me vendor transaction summary", description="Natural language question"),
     db: Session = Depends(get_db)
 ):
-    """Vendor transaction analytics"""
-    query = db.query(
-        Transaction.Vendor,
-        func.count(Transaction.TransactionID).label("count"),
-    )
-    
-    if start_date and end_date:
-        query = query.filter(Transaction.LoadDate.between(start_date, end_date))
-    
-    return query.group_by(Transaction.Vendor).all()
+    """Analytics using natural language to SQL conversion"""
+    try:
+        from app.services.text_to_sql_service import get_text_to_sql_service
+        
+        text_to_sql = get_text_to_sql_service()
+        result = text_to_sql.analyze_supply_chain_query(question)
+        
+        if not result["success"]:
+            return {"error": result.get("error"), "insights": result["insights"]}
+        
+        return {
+            "question": question,
+            "insights": result["insights"],
+            "data_summary": result["data_summary"],
+            "recommendations": result["recommendations"]
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/api/v1/transactions/{transaction_id}")
 def get_transaction(

@@ -41,12 +41,6 @@ class Settings(BaseSettings):
     AZURE_STORAGE_CONNECTION_STRING: str = ""
     BLOB_CONTAINER_NAME: str = "raw-upload"
     
-    # Azure AI Search (matching your .env) - FIXED: Use single index for everything
-    AZURE_SEARCH_SERVICE_NAME: str = ""
-    AZURE_SEARCH_ENDPOINT: str = ""
-    AZURE_SEARCH_API_KEY: str = ""
-    AZURE_SEARCH_INDEX_NAME: str = "chatbot-index-1"
-    
     # AI/LLM Configuration (matching your .env)
     OPENROUTER_API_KEY: str = ""
     LLAMA_MODEL: str = "google/gemma-3-27b-it:free"
@@ -60,9 +54,6 @@ class Settings(BaseSettings):
     COSMOS_DB_CONTAINER: str = ""
     COSMOS_DB_VECTOR_CONTAINER: str = ""
     
-    # Embedding Model (matching your .env)
-    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
-    
     # Logging (matching your .env)
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
@@ -70,7 +61,6 @@ class Settings(BaseSettings):
     # Processing Configuration
     MAX_INGEST_ROWS: Optional[int] = None  # None = no limit
     DEFAULT_BATCH_SIZE: int = 500
-    EMBEDDING_BATCH_SIZE: int = 100
     
     # AI Chat Configuration
     DEFAULT_MAX_TOKENS: int = 800
@@ -82,11 +72,6 @@ class Settings(BaseSettings):
     
     # Health Check
     HEALTH_CHECK_INTERVAL: int = 30  # seconds
-    
-    # Search Configuration
-    VECTOR_SEARCH_MIN_SCORE: float = 0.5
-    FULLTEXT_SEARCH_TOP_K: int = 15
-    HYBRID_SEARCH_ENABLED: bool = True
     
     @property
     def get_database_url(self) -> str:
@@ -165,10 +150,6 @@ def validate_settings():
     # Check database configuration - use the property method
     if not settings.database_url_complete:
         errors.append("Database configuration incomplete. Check SQL_* or DATABASE_URL environment variables.")
-    
-    # Check Azure AI Search - UPDATED to check for endpoint properly
-    if not all([settings.get_azure_search_endpoint, settings.AZURE_SEARCH_API_KEY]):
-        errors.append("Azure AI Search configuration incomplete. Check AZURE_SEARCH_* environment variables.")
     
     # Check LLM configuration
     if not settings.OPENROUTER_API_KEY:
@@ -258,26 +239,4 @@ DATABASE_TABLES = {
         "required_fields": ["TransactionID", "FacilityID", "Vendor", "ItemDesc", "TotalSpend"],
         "index_fields": ["Vendor", "FacilityType", "Category", "Department", "LoadDate"]
     }
-}
-
-# AI Search index schema
-AI_SEARCH_SCHEMA = {
-    "name": settings.AZURE_SEARCH_INDEX_NAME,
-    "fields": [
-        {"name": "id", "type": "Edm.String", "key": True, "searchable": False},
-        {"name": "content", "type": "Edm.String", "searchable": True, "analyzer": "standard.lucene"},
-        {"name": "content_vector", "type": "Collection(Edm.Single)", "searchable": True, "vector": True, "dimensions": 384},
-        {"name": "TransactionID", "type": "Edm.String", "searchable": True, "filterable": True},
-        {"name": "FacilityID", "type": "Edm.String", "filterable": True},
-        {"name": "FacilityType", "type": "Edm.String", "searchable": True, "filterable": True},
-        {"name": "Region", "type": "Edm.String", "searchable": True, "filterable": True},
-        {"name": "Vendor", "type": "Edm.String", "searchable": True, "filterable": True},
-        {"name": "Manufacturer", "type": "Edm.String", "searchable": True, "filterable": True},
-        {"name": "ItemDesc", "type": "Edm.String", "searchable": True, "analyzer": "standard.lucene"},
-        {"name": "TotalSpend", "type": "Edm.Double", "filterable": True, "sortable": True},
-        {"name": "Department", "type": "Edm.String", "searchable": True, "filterable": True},
-        {"name": "Category", "type": "Edm.String", "searchable": True, "filterable": True},
-        {"name": "batch_id", "type": "Edm.String", "filterable": True},
-        {"name": "metadata", "type": "Edm.String", "searchable": False}
-    ]
 }
