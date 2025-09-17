@@ -3,15 +3,30 @@ from typing import Dict, Any, List, Optional, Tuple, Set
 from app.services.llama_service import LlamaService
 from app.services.sql_service import get_sql_service
 import re
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class TextToSQLService:
+    # Month synonyms (full + common abbrevs) -> month number
+    MONTHS = {
+        "january": 1, "jan": 1,
+        "february": 2, "feb": 2,
+        "march": 3, "mar": 3,
+        "april": 4, "apr": 4,
+        "may": 5,
+        "june": 6, "jun": 6,
+        "july": 7, "jul": 7,
+        "august": 8, "aug": 8,
+        "september": 9, "sept": 9, "sep": 9,
+        "october": 10, "oct": 10,
+        "november": 11, "nov": 11,
+        "december": 12, "dec": 12,
+    }
+
     def __init__(self):
         self.llama_service = LlamaService
         self.sql_service = get_sql_service()
-        self._year_bounds: Optional[Tuple[int, int]] = None  # (min_year, max_year)
+        self._year_bounds: Optional[Tuple[int, int]] = None  # (min, max)
 
         # Authoritative schema used by the prompt
         self.schema = """
@@ -44,7 +59,7 @@ class TextToSQLService:
             q = (user_question or "").strip()
             logger.info(f"Analyzing query: {q}")
 
-            # 0) Super-short greeting? reply immediately (your #1)
+            # 0) Short greeting? reply immediately
             if self._is_greeting(q):
                 return {
                     "success": True,
@@ -59,7 +74,7 @@ class TextToSQLService:
             if not self._has_data():
                 return self._no_data_response()
 
-            # 2) Guard against asking for years we don't have (your #2)
+            # 2) Year guard
             asked_years = self._extract_explicit_years(q)
             if asked_years:
                 min_y, max_y = self._get_year_bounds()
@@ -71,20 +86,30 @@ class TextToSQLService:
                                     f"Available years range from {min_y} to {max_y}.",
                         "data_summary": {"total_records": 0},
                         "recommendations": ["Try a year within the available range",
-                                            "Ask for a monthly/quarterly breakdown",
+                                            "Ask for a monthly breakdown",
                                             "Review spending trends"],
                         "result_count": 0,
                         "sql_query": None
                     }
 
-            # 3) Generate SQL via LLM
-            sql_query = self._generate_sql(q)
-            if not sql_query:
-                return self._error_response("Could not generate SQL query")
+            # 3) Direct SQL for generic "item quantity" questions (how many / quantity of ...)
+            direct_item_sql = self._maybe_direct_sql_for_item_quantity(q)
+            if direct_item_sql:
+                sql_query = direct_item_sql
+            else:
+                # 4) Direct SQL for common month+year queries (reliable across all months)
+                direct_month_sql = self._maybe_direct_sql_for_month_year(q)
+                if direct_month_sql:
+                    sql_query = direct_month_sql
+                else:
+                    # 5) Otherwise, ask the LLM to generate SQL
+                    sql_query = self._generate_sql(q)
+                    if not sql_query:
+                        return self._error_response("Could not generate SQL query")
 
             logger.info(f"Generated SQL: {sql_query}")
 
-            # 4) Execute SQL
+            # Execute
             try:
                 results = self.sql_service.query_items(sql_query)
                 logger.info(f"SQL returned {len(results)} results")
@@ -94,7 +119,7 @@ class TextToSQLService:
                 logger.error(f"SQL execution failed: {sql_error}")
                 return self._error_response(f"Database query failed: {str(sql_error)}")
 
-            # 5) Natural-language answer
+            # NL answer
             insights = self._create_business_response(q, results, sql_query)
 
             return {
@@ -110,15 +135,13 @@ class TextToSQLService:
             logger.error(f"Analysis failed: {e}")
             return self._error_response(str(e))
 
-    # ---------------------------- light helpers ----------------------------
+    # ---------------------------- helpers ----------------------------
 
     def _is_greeting(self, text: str) -> bool:
-        """Return True for short greetings like 'hi', 'Hi there', 'HELLO', etc."""
         t = (text or "").strip().lower()
         if not t:
             return False
         greeting_words = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening"}
-        # short messages (<= 3 words) that start with a greeting word
         words = t.split()
         if len(words) <= 3:
             for g in greeting_words:
@@ -135,7 +158,6 @@ class TextToSQLService:
             return False
 
     def _get_year_bounds(self) -> Tuple[int, int]:
-        """Query and cache min/max year present in the dataset."""
         if self._year_bounds is not None:
             return self._year_bounds
         try:
@@ -145,7 +167,6 @@ class TextToSQLService:
             if rs and rs[0].get("MinYear") is not None and rs[0].get("MaxYear") is not None:
                 self._year_bounds = (int(rs[0]["MinYear"]), int(rs[0]["MaxYear"]))
             else:
-                # fallback if table is empty for safety
                 self._year_bounds = (1900, 2100)
         except Exception as e:
             logger.error(f"Year bounds lookup failed: {e}")
@@ -153,7 +174,6 @@ class TextToSQLService:
         return self._year_bounds
 
     def _extract_explicit_years(self, question: str) -> Set[int]:
-        """Return set of 4-digit years explicitly mentioned (e.g., 2022, 2024)."""
         years = set()
         for m in re.findall(r'\b(20\d{2})\b', question):
             try:
@@ -161,6 +181,189 @@ class TextToSQLService:
             except ValueError:
                 pass
         return years
+
+    def _extract_month_year(self, question: str) -> Tuple[Optional[int], Optional[int]]:
+        """Return (month_number, year) if both are present; robust to 'in/of <Month> <Year>'."""
+        q = question.lower()
+        # find year first
+        year = None
+        m_year = re.search(r'\b(20\d{2})\b', q)
+        if m_year:
+            try:
+                year = int(m_year.group(1))
+            except ValueError:
+                year = None
+
+        # find month keyword anywhere
+        month_num = None
+        for name, num in self.MONTHS.items():
+            if re.search(rf'\b{name}\b', q):
+                month_num = num
+                break
+
+        return month_num, year
+
+    # ---- NEW: generic "item quantity" fast-path --------------------------------
+
+    def _maybe_direct_sql_for_item_quantity(self, question: str) -> Optional[str]:
+        """
+        Build a safe SUM(Quantity) query for prompts like:
+          - How many syringes were purchased?
+          - Total quantity of masks purchased last year
+          - Quantity of IV kit / kits in September 2022
+        Robust to case, punctuation, and singular/plural; supports time filters.
+        """
+        q = (question or "").strip().lower()
+
+        # Detect the intent
+        if not (
+            "how many" in q
+            or "total quantity" in q
+            or re.search(r"\bquantity of\b", q)
+        ):
+            return None
+
+        # Try to extract the item phrase
+        item = self._extract_item_phrase(q)
+        if not item:
+            return None
+
+        # Exclude obvious non-item phrases like 'transactions'
+        if re.search(r"\btransaction(s)?\b", item):
+            return None
+
+        # Build item LIKEs (robust to punctuation + plural/singular)
+        like_clause = self._build_item_like_clause(item)
+        if not like_clause:
+            return None
+
+        # Optional time filter
+        time_filter = self._build_time_filter(q)
+
+        sql = (
+            "SELECT COALESCE(SUM(Quantity),0) AS TotalQuantity "
+            "FROM supply_records "
+            f"WHERE ({like_clause})"
+            f"{time_filter}"
+        )
+        return sql
+
+    def _extract_item_phrase(self, q: str) -> Optional[str]:
+        # 1) 'quantity of X ...'
+        m = re.search(r"\bquantity of\s+([a-z0-9\/\-\.\(\)\s]+?)\s*(?:were|was|purchased|bought|ordered|procured|in|for|last|this|q\d|20\d{2}|$)", q)
+        if m:
+            return m.group(1).strip(" .,/;:-")
+
+        # 2) 'how many X were/was ...'
+        m = re.search(r"\bhow many\s+([a-z0-9\/\-\.\(\)\s]+?)\s+(?:were|was|did|have)?\s*(?:purchased|bought|ordered|procured)?", q)
+        if m:
+            return m.group(1).strip(" .,/;:-")
+
+        # 3) fallback: after 'how many' until obvious time keywords or end
+        m = re.search(r"\bhow many\s+([a-z0-9\/\-\.\(\)\s]+?)\s*(?:in|for|last|this|q\d|20\d{2}|$)", q)
+        if m:
+            return m.group(1).strip(" .,/;:-")
+
+        return None
+
+    def _token_variants(self, token: str) -> Set[str]:
+        """Generate simple singular/plural variants."""
+        token = token.strip()
+        if not token:
+            return set()
+        variants = {token}
+        if token.endswith("s"):
+            variants.add(token.rstrip("s"))
+        else:
+            variants.add(token + "s")
+        # y/ies heuristic
+        if token.endswith("y") and len(token) > 1 and token[-2] not in "aeiou":
+            variants.add(token[:-1] + "ies")
+        if token.endswith("ies"):
+            variants.add(token[:-3] + "y")
+        return variants
+
+    def _sql_escape_like(self, s: str) -> str:
+        return s.replace("'", "''").lower()
+
+    def _build_item_like_clause(self, item_phrase: str) -> str:
+        txt = self._sql_escape_like(item_phrase)
+        # Whole phrase variants
+        phrase_variants = {txt}
+        if txt.endswith("s"):
+            phrase_variants.add(txt.rstrip("s"))
+        else:
+            phrase_variants.add(txt + "s")
+        # Token variants (drop very short stopwords)
+        raw_tokens = re.split(r"[ \/\-\_]+", txt)
+        tokens = [t for t in raw_tokens if len(t) >= 3 and t not in {"and", "the", "for", "per", "kit"}]
+        token_like_parts: List[str] = []
+        for t in tokens:
+            for v in self._token_variants(t):
+                v = self._sql_escape_like(v)
+                token_like_parts.append(f"LOWER(ItemDesc) LIKE '%{v}%'")
+
+        phrase_like_parts = [f"LOWER(ItemDesc) LIKE '%{self._sql_escape_like(v)}%'" for v in phrase_variants]
+        all_parts = list(set(phrase_like_parts + token_like_parts))
+        return " OR ".join(all_parts)
+
+    def _build_time_filter(self, q: str) -> str:
+        """Return ' AND ...' or '' based on time hints in the question."""
+        # Month + Year
+        month_num, year = self._extract_month_year(q)
+        if month_num and year:
+            return f" AND Year = {year} AND Month = {month_num}"
+
+        # Explicit single year
+        years = self._extract_explicit_years(q)
+        if len(years) == 1:
+            y = list(years)[0]
+            return f" AND Year = {y}"
+
+        # Relative periods
+        if "last month" in q:
+            return (
+                " AND Year = (CASE WHEN MONTH(GETDATE())=1 THEN YEAR(GETDATE())-1 ELSE YEAR(GETDATE()) END)"
+                " AND Month = (CASE WHEN MONTH(GETDATE())=1 THEN 12 ELSE MONTH(GETDATE())-1 END)"
+            )
+        if "this year" in q:
+            return " AND Year = YEAR(GETDATE())"
+        if "last year" in q:
+            return " AND Year = YEAR(GETDATE()) - 1"
+
+        return ""
+
+    # --------------------------------------------------------------------
+
+    def _maybe_direct_sql_for_month_year(self, question: str) -> Optional[str]:
+        """For queries like:
+           - How many transactions in April 2022?
+           - What's the total spend of September 2022?
+           Works for ANY month name/abbrev.
+        """
+        q = question.lower()
+        month_num, year = self._extract_month_year(q)
+        if not (month_num and year):
+            return None
+
+        # Count transactions?
+        if "how many" in q and ("transaction" in q or "transactions" in q):
+            return (
+                "SELECT COUNT(*) AS TransactionCount "
+                "FROM supply_records "
+                f"WHERE Year = {year} AND Month = {month_num}"
+            )
+
+        # Total spend for that month/year?
+        if "spend" in q or "total spend" in q or "spending" in q or "total cost" in q:
+            return (
+                "SELECT COALESCE(SUM(TotalSpend),0) AS TotalSpend "
+                "FROM supply_records "
+                f"WHERE Year = {year} AND Month = {month_num}"
+            )
+
+        # If month+year detected but not a known direct pattern, let LLM do it.
+        return None
 
     # ---------- Helper: detect "Top N" ----------
     def _extract_top_n(self, question: str, default_n: int = 100) -> int:
@@ -206,7 +409,8 @@ DATE LOGIC:
 - "last month" →
     WHERE Year  = CASE WHEN MONTH(GETDATE())=1 THEN YEAR(GETDATE())-1 ELSE YEAR(GETDATE()) END
       AND Month = CASE WHEN MONTH(GETDATE())=1 THEN 12 ELSE MONTH(GETDATE())-1 END
-- Month names & abbreviations → January/Jan=1, February/Feb=2, … December/Dec=12 (filter with Month = N)
+- Month names & abbreviations → January/Jan=1, February/Feb=2, March/Mar=3, April/Apr=4,
+  May=5, June/Jun=6, July/Jul=7, August/Aug=8, September/Sep/Sept=9, October/Oct=10, November/Nov=11, December/Dec=12.
 - Quarters → Q1: (1,2,3), Q2: (4,5,6), Q3: (7,8,9), Q4: (10,11,12)
 - Explicit (e.g., July 2024) → WHERE Year = 2024 AND Month = 7
 
@@ -217,7 +421,7 @@ OUTPUT RULES (critical):
 4) Aggregations must include GROUP BY for non-aggregated columns.
 5) NEVER use DDL/DML (DROP/DELETE/TRUNCATE/ALTER/CREATE/INSERT/UPDATE).
 6) Fuzzy item search must be case/punctuation robust: compare **LOWER(ItemDesc)** and match both singular and plural roots.
-   Example for "syringe/SYRINGES.":  LOWER(ItemDesc) LIKE '%syringe%' OR LOWER(ItemDesc) LIKE '%syringes%'.
+   Example: LOWER(ItemDesc) LIKE '%syringe%' OR LOWER(ItemDesc) LIKE '%syringes%'.
 7) Single aggregate aliases (wrap with COALESCE to avoid NULL):
    - COUNT(*)                      → AS TransactionCount
    - SUM(Quantity)                 → AS TotalQuantity
@@ -249,7 +453,7 @@ A: SELECT Vendor, SUM(TotalSpend) AS TotalSpend, COUNT(*) AS TransactionCount
    GROUP BY Vendor
    ORDER BY TotalSpend DESC;
 
--- 3b) COUNT last month (explicitly for reliability):
+-- 3b) COUNT last month (explicit):
 Q: how many transactions last month
 A: SELECT COUNT(*) AS TransactionCount
    FROM supply_records
@@ -263,18 +467,13 @@ A: SELECT TOP {requested_top_n} TransactionID, Vendor, VendorID, ItemDesc, Quant
    WHERE Year = YEAR(GETDATE()) - 1
    ORDER BY Month DESC, TotalSpend DESC;
 
--- 5) Fuzzy item + quantity (case & punctuation tolerant):
+-- 5) Fuzzy item + quantity:
 Q: how many SYRINGES. were purchased
 A: SELECT COALESCE(SUM(Quantity),0) AS TotalQuantity
    FROM supply_records
    WHERE LOWER(ItemDesc) LIKE '%syringe%' OR LOWER(ItemDesc) LIKE '%syringes%';
 
-Q: how many gloves were purchased
-A: SELECT COALESCE(SUM(Quantity),0) AS TotalQuantity
-   FROM supply_records
-   WHERE LOWER(ItemDesc) LIKE '%glove%' OR LOWER(ItemDesc) LIKE '%gloves%';
-
--- 6) Average unit price (your #3):
+-- 6) Average unit price:
 Q: what's the average unit price for all items
 A: SELECT COALESCE(AVG(PricePaid),0) AS AverageUnitPrice
    FROM supply_records;
@@ -286,14 +485,20 @@ A: SELECT DISTINCT Region
    WHERE Region IS NOT NULL
    ORDER BY Region;
 
--- 8) TOTAL COUNT (by year and by month name):
-Q: how many transactions in 2022
+-- 8) TOTAL COUNT by month (several examples to generalize across ALL months):
+Q: how many transactions in April 2022
 A: SELECT COUNT(*) AS TransactionCount
    FROM supply_records
-   WHERE Year = 2022;
+   WHERE Year = 2022 AND Month = 4;
 
-Q: how many transactions in September 2022
+Q: how many transactions in October 2022
 A: SELECT COUNT(*) AS TransactionCount
+   FROM supply_records
+   WHERE Year = 2022 AND Month = 10;
+
+-- 9) MONTHLY SPEND:
+Q: what's the total spend of September 2022
+A: SELECT COALESCE(SUM(TotalSpend),0) AS TotalSpend
    FROM supply_records
    WHERE Year = 2022 AND Month = 9;
 
@@ -304,7 +509,7 @@ RETURN ONLY THE SQL:
         """
 
         try:
-            sql = self.llama_service.query(prompt, max_tokens=240, temperature=0.05)
+            sql = self.llama_service.query(prompt, max_tokens=260, temperature=0.05)
             cleaned_sql = self._clean_sql(sql)
             logger.info(f"Generated SQL: {cleaned_sql}")
             return cleaned_sql
@@ -315,13 +520,9 @@ RETURN ONLY THE SQL:
     def _clean_sql(self, query: str) -> str:
         if not query:
             raise ValueError("Empty SQL query")
-        # Remove markdown fences
         query = re.sub(r'```sql\s*|\s*```', '', query).strip()
-        # Remove trailing semicolon
         query = query.rstrip(';').strip()
-        # Normalize misordered TOP
         query = re.sub(r'SELECT\s+(.+?)\s+TOP\s+(\d+)', r'SELECT TOP \2 \1', query, flags=re.IGNORECASE)
-        # Basic safety
         dangerous = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'CREATE', 'INSERT', 'UPDATE']
         if any(word in query.upper() for word in dangerous):
             raise ValueError("Unsafe SQL operation detected")
@@ -359,11 +560,8 @@ RETURN ONLY THE SQL:
         return "\n".join(lines)
 
     def _create_business_response(self, question: str, results: List[Dict], sql_query: str) -> str:
-        """Use only retrieved data; concise (<100 words)."""
         if not results:
             return "No relevant data found for your question. Try asking about specific vendors, items, or facilities in your uploaded data."
-
-        # Greeting already handled earlier, but keep a light guard:
         if self._is_greeting(question):
             return "Hi there! How can I help you analyze your procurement data today?"
 
@@ -417,7 +615,7 @@ RETURN ONLY THE SQL:
             except (ValueError, TypeError):
                 return default
 
-        # 0) Single-value numeric results (TotalQuantity / TotalSpend / TransactionCount / AverageUnitPrice)
+        # Single-value numeric results
         if len(results) == 1:
             r = results[0]
             if "AverageUnitPrice" in r and r["AverageUnitPrice"] is not None:
@@ -435,7 +633,6 @@ RETURN ONLY THE SQL:
             if "TotalSpend" in r and r["TotalSpend"] is not None:
                 v = float(r["TotalSpend"])
                 return f"Total spend: ${v:,.2f}"
-            # Generic single-number fallback
             if len(r.keys()) == 1:
                 k = next(iter(r.keys()))
                 try:
@@ -446,23 +643,7 @@ RETURN ONLY THE SQL:
                 except Exception:
                     pass
 
-        # 1) Single transaction detail
-        if len(results) == 1 and 'transaction' in question.lower():
-            r = results[0]
-            parts = []
-            if 'TransactionID' in r: parts.append(f"Transaction {safe_get(r, 'TransactionID')}")
-            if 'ItemDesc' in r:      parts.append(f"Item: {safe_get(r, 'ItemDesc')}")
-            if 'Vendor' in r:        parts.append(f"Vendor: {safe_get(r, 'Vendor')}")
-            if 'Quantity' in r:      parts.append(f"Quantity: {safe_get(r, 'Quantity', 'Not available')}")
-            if 'PricePaid' in r:
-                price = safe_float(r, 'PricePaid')
-                parts.append(f"Unit Price: ${price:,.2f}" if price > 0 else "Unit Price: Not available")
-            if 'TotalSpend' in r:
-                total = safe_float(r, 'TotalSpend')
-                parts.append(f"Total: ${total:,.2f}" if total > 0 else "Total: Not available")
-            return " | ".join(parts)
-
-        # 2) DISTINCT listings (e.g., SELECT DISTINCT Region)
+        # DISTINCT listings
         present_keys = set(results[0].keys())
         known_dims = ["Region", "Vendor", "ItemDesc", "FacilityType", "FacilityID", "Manufacturer"]
         metric_like = {"TotalSpend", "TotalQuantity", "TransactionCount", "Quantity", "PricePaid", "AverageUnitPrice"}
@@ -483,7 +664,7 @@ RETURN ONLY THE SQL:
                 label = {"ItemDesc": "products", "FacilityType": "facility types"}.get(distinct_dim, distinct_dim.lower() + "s")
                 return f"{label.capitalize()}: " + ", ".join(values)
 
-        # 3) Aggregate / multi-row summary
+        # Aggregates
         candidate_dims = ["Region", "Vendor", "ItemDesc", "FacilityID", "FacilityType", "Manufacturer", "Year", "Month"]
         group_key = next((k for k in candidate_dims if k in present_keys), None)
 
@@ -495,18 +676,17 @@ RETURN ONLY THE SQL:
                 ts_val = None
             if ts_val is not None and ts_val > 0:
                 return ts_val
-            q = safe_float(r, 'Quantity', 0.0)
+            qv = safe_float(r, 'Quantity', 0.0)
             p = safe_float(r, 'PricePaid', 0.0)
-            return q * p if (q > 0 and p > 0) else 0.0
+            return qv * p if (qv > 0 and p > 0) else 0.0
 
-        # Pure COUNT(*) results fallback
+        # Pure COUNT fallback
         if len(results) == 1 and ('TransactionCount' in results[0] or 'COUNT' in ''.join(results[0].keys()).upper()):
             count_val = results[0].get('TransactionCount')
             if count_val is None:
                 for v in results[0].values():
                     try:
-                        count_val = int(v)
-                        break
+                        count_val = int(v); break
                     except (ValueError, TypeError):
                         continue
             return f"Total transactions: {count_val}"
@@ -515,7 +695,7 @@ RETURN ONLY THE SQL:
 
         distinct_count = 0
         if group_key:
-            distinct_count = len(set(safe_get(r, group_key, 'Unknown') for r in results if group_key in r))
+            distinct_count = len({safe_get(r, group_key, 'Unknown') for r in results if group_key in r})
 
         context = f"{len(results)} records found"
         if total_spend > 0:
@@ -523,18 +703,11 @@ RETURN ONLY THE SQL:
 
         if group_key and distinct_count > 0:
             pretty = {
-                "Vendor": "vendors",
-                "Region": "regions",
-                "ItemDesc": "products",
-                "FacilityID": "facilities",
-                "FacilityType": "facility types",
-                "Manufacturer": "manufacturers",
-                "Year": "years",
-                "Month": "months",
+                "Vendor": "vendors", "Region": "regions", "ItemDesc": "products", "FacilityID": "facilities",
+                "FacilityType": "facility types", "Manufacturer": "manufacturers", "Year": "years", "Month": "months",
             }.get(group_key, group_key.lower() + "s")
             context += f", {distinct_count} {pretty}"
 
-        # Top group by spend
         if group_key and ('TotalSpend' in present_keys or any('TotalSpend' in r for r in results)):
             totals = {}
             for r in results:
@@ -548,7 +721,7 @@ RETURN ONLY THE SQL:
 
         return context
 
-    # ---------------------------- light summaries ----------------------------
+    # ---------------------------- summaries ----------------------------
 
     def _summarize_data(self, results: List[Dict]) -> Dict[str, Any]:
         if not results:
