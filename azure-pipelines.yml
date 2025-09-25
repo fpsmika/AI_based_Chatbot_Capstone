@@ -10,7 +10,7 @@ resources:
 
 variables:
   # Container registry service connection established during pipeline creation
-  dockerRegistryServiceConnection: 'd42123ae-7fa7-4a10-84c8-219d7dfd2041'
+  dockerRegistryServiceConnection: '1902f148-969a-40c5-a81c-0178836abea7'
   imageRepository: 'fpsmikaaibasedchatbotcapstone'
   containerRegistry: 'fpsmikaaibasedchatbotcapstone.azurecr.io'
   dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'

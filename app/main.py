@@ -1,11 +1,11 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from app.core.logging import setup_logging
 from app.core.config import settings
 from app.utils.db import get_db
 from app.services.llama_service import LlamaService
-from app.services.cosmos_service import get_cosmos_service  # Add this import
+from app.services.sql_service import get_sql_service  
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import date
@@ -13,10 +13,27 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 from app.models.transaction import Transaction  
 from app.api.routes.chat import router as chat_router
-from app.api.routes.cosmos import router as cosmos_router  
+from app.api.routes.sql_data import router as sql_router
+from app.api.routes.process import router as process_router
+from app.api.routes.chat_history import router as chat_history_router
+from fastapi import UploadFile, File
+import os
+from azure.storage.blob import BlobServiceClient
+
+
+
+
+
 
 # Logging Setup
 setup_logging()
+
+azure_logger = logging.getLogger("azure")
+azure_logger.setLevel(logging.WARNING)  # Only show WARNING and above for all Azure components
+
+# Specifically silence the HTTP logger
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
+
 
 logger = logging.getLogger(__name__)
 
@@ -31,27 +48,28 @@ class ChatResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle management"""
-    logger.info("AI Chatbot Ready...")
+    logger.info("AI Chatbot Starting...")
     
-    # Test Llama connection on startup
     try:
+        # Test OpenRouter connection
         test_response = LlamaService.query("Hello", max_tokens=10)
         logger.info(f"✅ Llama API connection verified: {test_response[:50]}...")
+        
+        # Test SQL Database connection
+        try:
+            sql_service = get_sql_service()
+            sql_test = sql_service.test_connection()
+            logger.info(f"✅ SQL Database connection verified: {sql_test}")
+        except Exception as sql_error:
+            logger.error(f"❌ SQL Database connection failed: {sql_error}")
+        
+        logger.info("✅ System startup completed")
+        
     except Exception as e:
-        logger.error(f"❌ Llama API connection failed: {str(e)}")
+        logger.error(f"❌ Startup failed: {e}")
     
-    
-    # Test Cosmos DB connection on startup
-    try:
-        cosmos_container = get_cosmos_service()
-        list(cosmos_container.read_all_items(max_item_count=1))
-        logger.info("✅ Cosmos DB connection verified")
-    except Exception as e:
-        logger.error(f"❌ Cosmos DB connection error: {str(e)}")
-
     yield
-    logger.info("Shutting down AI Chatbot...")
+    logger.info("AI Chatbot Shutting Down...")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -62,6 +80,7 @@ app = FastAPI(
     redoc_url=None
 )
 
+
 # CORS Middleware 
 # app.add_middleware(
 #     CORSMiddleware,
@@ -69,6 +88,8 @@ app = FastAPI(
 #     allow_methods=["*"],
 #     allow_headers=["*"],
 # )
+
+
 
 logger.info(f"CORS origins at runtime: {settings.ALLOWED_ORIGINS}\n")
 app.add_middleware(
@@ -87,10 +108,67 @@ app.include_router(
 )
 
 app.include_router(
-    cosmos_router,
-    prefix="/api/v1/cosmos",
-    tags=["Cosmos DB"]
+    sql_router,  
+    prefix="/api/v1/sql",  
+    tags=["SQL Database"]  
 )
+
+app.include_router(
+    process_router,
+    prefix="/api/v1",
+    tags=["Process"]
+)
+
+app.include_router(
+    chat_history_router,
+    prefix="/api/v1",
+    tags=["Chat History"]
+)
+
+
+blob_service_client = BlobServiceClient.from_connection_string(
+    settings.AZURE_STORAGE_CONNECTION_STRING
+)
+container_client = blob_service_client.get_container_client(
+    settings.BLOB_CONTAINER_NAME
+)
+
+@app.get("/api/v1/ping-blob")
+async def ping_blob():
+    """
+    Quick check that our blob container is reachable.
+    """
+    try:
+        count = sum(1 for _ in container_client.list_blobs())
+        return {
+            "container": settings.BLOB_CONTAINER_NAME,
+            "blob_count": count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Blob ping failed: {str(e)}")
+
+@app.post("/api/v1/upload")
+async def upload_to_blob(file: UploadFile = File(...)):
+    """
+    Receive a CSV/XLS/XLSX from the frontend,
+    upload it as a blob into your raw-upload container.
+    """
+    
+    blob_name = file.filename
+
+    try:
+        data = await file.read()
+        container_client.upload_blob(
+            name=blob_name,
+            data=data,
+            overwrite=True
+        )
+        return {
+            "status": "success",
+            "message": f"Uploaded '{blob_name}' to container '{settings.BLOB_CONTAINER_NAME}'."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 @app.get("/")
 def root():
@@ -125,13 +203,13 @@ def full_health_check(db: Session = Depends(get_db)):
     except Exception as e:
         health_status["services"]["sql_database"] = f"unhealthy: {str(e)}"
     
-        # Check Cosmos DB
+        # Check SQL DB
     try:
-        cosmos_container = get_cosmos_service()
-        list(cosmos_container.read_all_items(max_item_count=1))
-        health_status["services"]["cosmos_db"] = "healthy"
+        service = get_sql_service()
+        service.test_connection()
+        health_status["services"]["sql_database"] = "healthy"
     except Exception as e:
-        health_status["services"]["cosmos_db"] = f"unhealthy: {str(e)}"
+        health_status["services"]["sql_database"] = f"unhealthy: {str(e)}"
 
     
     # Check Llama API
@@ -180,21 +258,29 @@ def get_transactions(
     return query.offset(skip).limit(limit).all()
 
 @app.get("/api/v1/transactions/analytics")
-def get_analytics(
-    start_date: date = None,
-    end_date: date = None,
+async def get_analytics(
+    question: str = Query("Show me vendor transaction summary", description="Natural language question"),
     db: Session = Depends(get_db)
 ):
-    """Vendor transaction analytics"""
-    query = db.query(
-        Transaction.Vendor,
-        func.count(Transaction.TransactionID).label("count"),
-    )
-    
-    if start_date and end_date:
-        query = query.filter(Transaction.LoadDate.between(start_date, end_date))
-    
-    return query.group_by(Transaction.Vendor).all()
+    """Analytics using natural language to SQL conversion"""
+    try:
+        from app.services.text_to_sql_service import get_text_to_sql_service
+        
+        text_to_sql = get_text_to_sql_service()
+        result = text_to_sql.analyze_supply_chain_query(question)
+        
+        if not result["success"]:
+            return {"error": result.get("error"), "insights": result["insights"]}
+        
+        return {
+            "question": question,
+            "insights": result["insights"],
+            "data_summary": result["data_summary"],
+            "recommendations": result["recommendations"]
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/api/v1/transactions/{transaction_id}")
 def get_transaction(
@@ -207,54 +293,6 @@ def get_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
     return transaction
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, db: Session = Depends(get_db)):
-    """AI-powered chatbot endpoint with context"""
-    logger.info(f"Received chat message: {request.message}")
-    
-    try:
-        # Get relevant transaction data for context
-        relevant_transactions = Transaction.search_relevant(db, request.message, limit=3)
-        
-        # Build context for AI
-        context = ""
-        if relevant_transactions:
-            context = "Recent transaction data:\n"
-            for tx in relevant_transactions:
-                context += f"- {tx.Vendor} ({tx.FacilityType}, {tx.Region})\n"
-        
-        # Create enhanced prompt with context
-        system_prompt = """You are an AI assistant specializing in supply chain management. 
-        Help users with transaction data, vendor information, and supply chain queries.
-        Be concise but helpful. If asked about specific data, reference the context provided."""
-        
-        enhanced_prompt = f"{system_prompt}\n\nContext: {context}\n\nUser Question: {request.message}"
-        
-        # Get AI response
-        ai_response = LlamaService.query(enhanced_prompt, max_tokens=300)
-        
-        # Generate contextual suggestions
-        suggestions = []
-        if "vendor" in request.message.lower():
-            suggestions.extend(["Show vendor analytics", "Compare vendor performance"])
-        if "transaction" in request.message.lower():
-            suggestions.extend(["View recent transactions", "Transaction by date range"])
-        if not suggestions:
-            suggestions = ["Order status", "Inventory check", "Supplier contact"]
-        
-        return ChatResponse(
-            response=ai_response,
-            suggestions=suggestions[:3],  # Limit to 3 suggestions
-            context=context if context else None
-        )
-        
-    except Exception as e:
-        logger.error(f"Chat endpoint error: {str(e)}")
-        # Fallback response
-        return ChatResponse(
-            response=f"I encountered an issue processing your request: {str(e)}. Please try again.",
-            suggestions=["Try rephrasing", "Check system status", "Contact support"]
-        )
 
 # Add a simple chat test endpoint
 @app.post("/chat/test")

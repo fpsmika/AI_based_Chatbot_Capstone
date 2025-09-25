@@ -1,13 +1,18 @@
+
+
 services:
   aibasedchatbotcapstone:
-    image: aibasedchatbotcapstone
+    container_name: chatbot-backend
     build:
       context: .
-      dockerfile: ./Dockerfile
-    environment:
-      - PYTHONPATH=/app
-    ports:
-      - 8000:8000
+      dockerfile: Dockerfile
+    image: aibasedchatbotcapstone
     env_file:
       - .env
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+   
     

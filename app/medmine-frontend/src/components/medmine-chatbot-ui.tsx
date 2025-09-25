@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 
 
-
 const Icons = {
   Send: () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -34,11 +33,10 @@ const Icons = {
       <line x1="12" y1="15" x2="12" y2="3"/>
     </svg>
   ),
-  Settings: () => (
+  Search: () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-      <circle cx="12" cy="12" r="3"/>
-      <path d="M12 1v6m0 6v6"/>
-      <path d="m21 12-6-6v12l6-6z"/>
+      <circle cx="11" cy="11" r="8"/>
+      <path d="m21 21-4.35-4.35"/>
     </svg>
   ),
   User: () => (
@@ -67,15 +65,81 @@ const Icons = {
       <path d="M18 6 6 18"/>
       <path d="m6 6 12 12"/>
     </svg>
-  )
+  ),
+  Database: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <ellipse cx="12" cy="5" rx="9" ry="3"/>
+      <path d="M3 5v14c0 3 6 3 9 3s9 0 9-3V5"/>
+      <path d="M3 12c0 3 6 3 9 3s9 0 9-3"/>
+    </svg>
+  ),
+  Trash: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="3 6 5 6 21 6"/>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+    </svg>
+  ),
 };
 
+// Enhanced interfaces
+interface Message {
+  id: number;
+  type: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: Date;
+  context?: string;
+  suggestions?: string[];
+  sources?: Array<{
+    source: string;
+    ItemDesc?: string;
+    Vendor?: string;
+    TotalSpend?: number;
+    similarity?: number;
+    [key: string]: any;
+  }>;
+}
+
+interface SearchResult {
+  "@search.score"?: number;
+  id: string;
+  content?: string;
+  TransactionID: string;
+  ItemDesc: string;
+  Manufacturer?: string;
+  Vendor: string;
+  FacilityType?: string;
+  Region?: string;
+  PricePaid?: number;
+  TotalSpend: number;
+  LoadDate?: string;
+  metadata?: string;
+  similarity?: number;
+  [key: string]: any;
+}
+
+interface ChatResponse {
+  response: string;
+  suggestions: string[];
+  context?: string;
+  session_id?: string;
+  sources?: Array<{
+    source: string;
+    ItemDesc?: string;
+    Vendor?: string;
+    TotalSpend?: number;
+    similarity?: number;
+    [key: string]: any;
+  }>;
+}
+
+const API_BASE = 'http://localhost:8000/api/v1';
+
 const MedMineChatbot = () => {
-  const [messages, setMessages] = useState([
+  const [messages, setMessages] = useState<Message[]>([
     {
       id: 1,
       type: 'assistant',
-      content: "Hello! I'm Earl, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
+      content: "Hello! I'm EARL, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
       timestamp: new Date()
     }
   ]);
@@ -84,23 +148,198 @@ const MedMineChatbot = () => {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [fileData, setFileData] = useState<Array<Record<string, string>> | null>(null);
   const [showFilePreview, setShowFilePreview] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [showSearchResults, setShowSearchResults] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  
-  const querySuggestions = [
-    "What's our total spending on gloves this year?",
-    "Compare vendor A and vendor B for IV bags",
-    "Which department purchased the most items?",
-    "Show me the top 5 most expensive purchases",
-    "How has our PPE spending changed over time?"
-  ];
+  const [currentBatch, setCurrentBatch] = useState<string | null>(null);
+  const [totalRows, setTotalRows] = useState<number>(0);
+
+  // Chat history state
+  const [chatHistory, setChatHistory] = useState<Array<{
+    id: string;
+    title: string;
+    created_at: string;
+    message_count: number;
+  }>>([]);
+
+  const [sessionId] = useState(() => {
+    return crypto.randomUUID();
+  });
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [isSavingMessage, setIsSavingMessage] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(false);
+  const initializedRef = useRef(false);
+
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const initializeChat = async () => {
+      if (initializedRef.current) return;
+      initializedRef.current = true;
+      
+      setIsInitializing(true);
+      
+      try {
+        // First fetch existing chat history
+        const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}`);
+        if (response.ok) {
+          const data = await response.json();
+          const chats = data.chats || [];
+          setChatHistory(chats);
+          
+          // Only create a new chat if there's no history
+          if (chats.length === 0) {
+            const newChatId = await createNewChatSession();
+            if (newChatId) {
+              setCurrentChatId(newChatId);
+            }
+          } else {
+            console.log('Found existing chats:', chats.length);
+          }
+        } else {
+          // If fetching fails, try to create a new session
+          const newChatId = await createNewChatSession();
+          if (newChatId) {
+            setCurrentChatId(newChatId);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to initialize chat:', error);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
 
+    initializeChat();
+  }, []);
 
+  const fetchChatHistory = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setChatHistory(data.chats || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch chat history:', error);
+    }
+  };
+
+  const createNewChatSession = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}/create`, {
+        method: 'POST'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentChatId(data.chat_id);
+        return data.chat_id;
+      }
+    } catch (error) {
+      console.error('Failed to create new chat session:', error);
+    }
+    return null;
+  };
+
+  const saveMessageToDb = async (chatId: string, message: any) => {
+  // Prevent duplicate saves
+    if (isSavingMessage) {
+      console.log('Already saving a message, skipping...');
+      return;
+    }
+    
+    setIsSavingMessage(true);
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: message.type,
+          content: message.content,
+          context: message.context || null,
+          suggestions: message.suggestions || [],
+          sources: message.sources || []
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to save message: ${response.status}`);
+      }
+      
+      console.log('Message saved successfully');
+    } catch (error) {
+      console.error('Failed to save message:', error);
+      // You might want to show a user-friendly error here
+    } finally {
+      setIsSavingMessage(false);
+    }
+  };
+
+  const loadChatSession = async (chatId: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/cosmos/chats/${sessionId}/${chatId}`);
+      if (response.ok) {
+        const data = await response.json();
+        
+        const uiMessages = data.messages.map((msg: any, index: number) => ({
+          id: index + 1,
+          type: msg.type,
+          content: msg.content,
+          timestamp: new Date(msg.timestamp),
+          context: msg.context,
+          suggestions: msg.suggestions,
+          sources: msg.sources
+        }));
+        
+        setMessages(uiMessages || []);
+        setCurrentChatId(chatId);
+        
+        if (data.chat_info?.file_info) {
+          const fileInfo = data.chat_info.file_info;
+          setUploadedFile({
+            name: fileInfo.name,
+            batch_id: fileInfo.batch_id,
+            rows_loaded: fileInfo.rows_loaded
+          } as any);
+          setCurrentBatch(fileInfo.batch_id);
+          setTotalRows(fileInfo.rows_loaded);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load chat session:', error);
+    }
+  };
+
+  const createNewChat = async () => {
+    if (isInitializing) {
+      console.log('Still initializing, skipping new chat creation');
+      return;
+    }
+    const newChatId = await createNewChatSession();
+    if (newChatId) {
+      setMessages([{
+        id: 1,
+        type: 'assistant',
+        content: "Hello! I'm EARL, your AI assistant for purchase order data analysis. Upload a file or ask me about your procurement data.",
+        timestamp: new Date()
+      }]);
+      setCurrentChatId(newChatId);
+      setUploadedFile(null);
+      setFileData(null);
+      setShowFilePreview(false);
+      setCurrentBatch(null);
+      setTotalRows(0);
+      setSearchResults([]);
+      setShowSearchResults(false);
+      
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      
+      await fetchChatHistory();
+    }
+  };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
   const file = event.target.files?.[0];
@@ -193,31 +432,168 @@ const MedMineChatbot = () => {
   }
 };
 
-// somewhere near the top of the component – use whichever store you prefer
-const [sessionId] = useState(() => {
-  // try to re-use a session across page reloads
-  return localStorage.getItem('mmSession') ?? crypto.randomUUID();
-});
 
-useEffect(() => {
-  localStorage.setItem('mmSession', sessionId);
-}, [sessionId]);
+  const deleteChatSession = async (chatId: string) => {
+    if (window.confirm('Are you sure you want to delete this chat?')) {
+      try {
+        const response = await fetch(`${API_BASE}/cosmos/chats/${chatId}`, {
+          method: 'DELETE'
+        });
+        if (response.ok) {
+          if (chatId === currentChatId) {
+            await createNewChat();
+          }
+          fetchChatHistory();
+        }
+      } catch (error) {
+        console.error('Failed to delete chat:', error);
+      }
+    }
+  };
+
+  const downloadChat = () => {
+    // Create chat content
+    const chatContent = messages.map(msg => {
+      const timestamp = msg.timestamp.toLocaleString();
+      const sender = msg.type === 'user' ? 'You' : msg.type === 'assistant' ? 'EARL' : 'System';
+      return `[${timestamp}] ${sender}: ${msg.content}`;
+    }).join('\n\n');
+
+    // Add header
+    const header = `MedMine Chat Export\nDate: ${new Date().toLocaleString()}\n${uploadedFile ? `Data File: ${uploadedFile.name}` : 'No data file uploaded'}\n${'='.repeat(50)}\n\n`;
+    const fullContent = header + chatContent;
+
+    // Create blob and download
+    const blob = new Blob([fullContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `medmine-chat-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
 
+    let chatId = currentChatId;
+    if (!chatId) {
+      chatId = await createNewChatSession();
+      if (!chatId) {
+        console.error('Failed to create chat session');
+        return;
+      }
+    }
 
+    // Validate extension client‑side
+    const allowed = ['.csv', '.xlsx', '.xls'];
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    if (!allowed.includes(ext)) {
+      const errorMsg = {
+        id: Date.now(),
+        type: 'system' as const,
+        content: `Unsupported file type "${ext}". Please upload one of: ${allowed.join(', ')}`,
+        timestamp: new Date()
+      };
+      setMessages(m => [...m, errorMsg]);
+      
+      await saveMessageToDb(chatId, errorMsg);
+      
+      // Clear the input value after showing error
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      return;
+    }
+
+    setUploadedFile(file);
+    const uploadMsg = {
+      id: Date.now(),
+      type: 'system' as const,
+      content: `Uploading "${file.name}"…`,
+      timestamp: new Date()
+    };
+    setMessages(m => [...m, uploadMsg]);
+
+    try {
+      // 1) Send file to /process → returns batch_id with status="enqueued"
+      const fd = new FormData();
+      fd.append('file', file);
+
+      const res = await fetch(`${API_BASE}/process`, {
+        method: 'POST',
+        body: fd
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      const json = await res.json();
+
+      // accept both 'success' (old flow) or 'enqueued' (new background flow)
+      if (json.status !== 'success' && json.status !== 'enqueued') {
+        throw new Error(json.detail || 'Server processing failed');
+      }
+
+      const { batch_id, rows_loaded } = json;
 
 const handleSendMessage = async () => {
   if (!inputValue.trim()) return;
 
-  const userMsg = {
-    id: Date.now(),
-    type: 'user',
-    content: inputValue,
-    timestamp: new Date(),
-  };
-  setMessages(prev => [...prev, userMsg]);
-  setInputValue('');
-  setIsLoading(true);
+
+      // 2) Notify user
+      const successMsg = {
+        id: Date.now(),
+        type: 'system' as const,
+        content: `✅ ${json.status === 'success' ? 'Processed' : 'Enqueued'} batch ${batch_id}: ${rows_loaded} rows. Data is now searchable!`,
+        timestamp: new Date()
+      };
+      
+      setMessages(m => {
+        const withoutUploading = m.slice(0, -1);
+        return [...withoutUploading, successMsg];
+      });
+      
+      await saveMessageToDb(chatId, successMsg);
+      
+      await fetch(`${API_BASE}/cosmos/chats/${chatId}/file-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: file.name,
+          batch_id: batch_id,
+          rows_loaded: rows_loaded,
+          uploaded_at: new Date().toISOString()
+        })
+      });
+
+
+      setCurrentBatch(batch_id);
+      setTotalRows(rows_loaded);
+
+      // 3) Create a simple file preview from the original file if it's CSV
+      if (file.type === 'text/csv' || file.name.endsWith('.csv')) {
+        try {
+          const text = await file.text();
+          const delimiter = text.includes('\t') ? '\t' : ',';
+          const lines = text.split('\n').slice(0, 4);
+          const headers = lines[0]?.split(delimiter) || [];
+          const rows = lines.slice(1).map(line => {
+            const values = line.split(delimiter);
+            const row: Record<string, string> = {};
+            headers.forEach((header, index) => {
+              row[header?.trim() || `col${index}`] = values[index]?.trim() || '';
+            });
+            return row;
+          }).filter(row => Object.values(row).some(v => v));
+          
+          setFileData(rows);
+          setShowFilePreview(true);
+        } catch (previewError) {
+          console.warn('Could not create file preview:', previewError);
+        }
+      }
 
   try {
     // Prepare the request payload with CSV data if available
@@ -237,105 +613,137 @@ const handleSendMessage = async () => {
       } : null
     };
 
-    // Call your chat API with the enhanced payload
-    const response = await fetch('http://localhost:8000/api/v1/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (err) {
+      console.error(err);
+      const errorMsg = {
+        id: Date.now(),
+        type: 'system' as const,
+        content: `❌ Failed to process "${file.name}": ${err instanceof Error ? err.message : err}`,
+        timestamp: new Date()
+      };
+      
+      setMessages(m => {
+        const withoutUploading = m.slice(0, -1);
+        return [...withoutUploading, errorMsg];
+      });
+      
+      await saveMessageToDb(chatId, errorMsg);
+      
+      setUploadedFile(null);
+      setFileData(null);
+      setShowFilePreview(false);
+      
+      // Clear the input value after error
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!inputValue.trim()) return;
     
-    const { response: aiResponse, suggestions, context } = await response.json();
-    
-    // Create AI message with the actual response from LlamaService
-    const aiMsg = {
-      id: Date.now() + 1,
-      type: 'assistant',
-      content: aiResponse,
+    let chatId = currentChatId;
+    if (!chatId) {
+      chatId = await createNewChatSession();
+      if (!chatId) {
+        console.error('Failed to create chat session');
+        return;
+      }
+    }
+
+    const userMsg: Message = {
+      id: Date.now(),
+      type: 'user',
+      content: inputValue,
       timestamp: new Date(),
-      suggestions: suggestions || [],
-      context: context || null
     };
     
-    setMessages(prev => [...prev, aiMsg]);
-  } catch (err) {
-    console.error('Chat API Error:', err);
-    const errorMessage =
-      err instanceof Error
-        ? err.message
-        : typeof err === 'string'
-        ? err
-        : 'An unknown error occurred';
+    // Add user message to UI immediately
+    setMessages(prev => [...prev, userMsg]);
     
-    setMessages(prev => [
-      ...prev,
-      {
+    const currentInput = inputValue;
+    setInputValue('');
+    setIsLoading(true);
+
+    try {
+      // Save user message to database
+      await saveMessageToDb(chatId, userMsg);
+      
+      // Send everything directly to chat endpoint (no special commands)
+      const payload = {
+        message: currentInput,
+        session_id: sessionId,
+        csv_data: fileData && fileData.length > 0
+          ? {
+              filename: uploadedFile?.name || 'uploaded_file.csv',
+              headers: Object.keys(fileData[0]).filter(k => k !== 'id'),
+              data: fileData.map(({ id, ...rest }) => rest),
+              row_count: fileData.length,
+            }
+          : null,
+      };
+
+      const response = await fetch(`${API_BASE}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `HTTP ${response.status}`);
+      }
+
+      const { response: aiText, suggestions, context, sources }: ChatResponse = await response.json();
+
+      const aiMsg: Message = {
+        id: Date.now() + 1,
+        type: 'assistant',
+        content: aiText,
+        timestamp: new Date(),
+        context,
+        suggestions: suggestions || [],
+        sources
+      };
+
+      // Add AI message to UI
+      setMessages(prev => [...prev, aiMsg]);
+      
+      // Save AI message to database
+      await saveMessageToDb(chatId, aiMsg);
+      
+      // Refresh chat history
+      fetchChatHistory();
+      
+    } catch (err) {
+      console.error('Chat API Error:', err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      const errorMsg: Message = {
         id: Date.now() + 1,
         type: 'assistant',
         content: `⚠️ Error: ${errorMessage}`,
         timestamp: new Date(),
-      },
-    ]);
-  } finally {
-    setIsLoading(false);
-  }
-};
-
-//////
-
-//////Previous mock response code
-
-//   const handleSendMessage = async () => {
-//     if (!inputValue.trim()) return;
-
-//     const userMessage = {
-//       id: Date.now(),
-//       type: 'user',
-//       content: inputValue,
-//       timestamp: new Date()
-//     };
-
-//     setMessages(prev => [...prev, userMessage]);
-//     setInputValue('');
-//     setIsLoading(true);
-
-    
-
-
-//     setTimeout(() => {
-//       const assistantMessage = {
-//         id: Date.now() + 1,
-//         type: 'assistant',
-//         content: generateMockResponse(inputValue),
-//         timestamp: new Date()
-//       };
+      };
       
-//       setMessages(prev => [...prev, assistantMessage]);
-//       setIsLoading(false);
-//      }, 2500);
-//   };
-// const generateMockResponse = (query: string): string => { return "Timeout: "+query; }
+      setMessages(prev => [...prev, errorMsg]);
+      
+      // Save error message to database
+      await saveMessageToDb(chatId, {
+        type: 'assistant',
+        content: `⚠️ Error: ${errorMessage}`,
+        context: null,
+        suggestions: [],
+        sources: []
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-
-  // const generateMockResponse = (query: string): string => {
-  //   const lowerQuery = query.toLowerCase();
-  //   if (lowerQuery.includes('spending') || lowerQuery.includes('cost')) {
-  //     return "Based on your purchase order data, total spending on the requested items is $1,120.75. This represents a 15% increase compared to the previous period.";
-  //   } else if (lowerQuery.includes('vendor') || lowerQuery.includes('supplier')) {
-  //     return "MedSupply Co is your top vendor with 3 orders totaling $640.25, followed by FluidTech with $275.50. MedSupply Co offers competitive pricing for surgical supplies.";
-  //   } else if (lowerQuery.includes('department')) {
-  //     return "Surgery department has the highest procurement activity with 2 major orders. Emergency and ICU departments follow with significant medical supply purchases.";
-  //   } else {
-  //     return "I've analyzed your purchase order data. Could you please be more specific about what you'd like to know? I can help with spending analysis, vendor comparisons, or departmental insights.";
-  //   }
-  // };
-
-  interface SuggestionClickEvent {
-    (suggestion: string): void;
-  }
-
-  const handleSuggestionClick: SuggestionClickEvent = (suggestion: string) => {
+  const handleSuggestionClick = (suggestion: string) => {
     setInputValue(suggestion);
   };
 
@@ -345,6 +753,7 @@ const handleSendMessage = async () => {
       handleSendMessage();
     }
   };
+
 
   const downloadChat = () => {
     // Create chat content
@@ -512,22 +921,44 @@ const handleSendMessage = async () => {
       borderBottom: '1px solid #f3f4f6',
       color: '#111827',
     },
-    suggestionsSection: {
+    chatHistorySection: {
       padding: '16px',
       flex: 1
     },
-    suggestionsTitle: {
+    chatHistoryTitle: {
       fontWeight: '500',
       color: '#111827',
       marginBottom: '12px',
       fontSize: '14px'
     },
-    suggestion: {
+    newChatButton: {
+      width: '100%',
+      marginBottom: '12px',
+      padding: '10px',
+      fontSize: '14px',
+      fontWeight: '500',
+      color: '#2563eb',
+      backgroundColor: '#eff6ff',
+      border: '1px solid #dbeafe',
+      borderRadius: '8px',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      transition: 'background-color 0.2s'
+    },
+    chatHistoryList: {
+      overflowY: 'auto',
+      maxHeight: 'calc(100vh - 450px)'
+    },
+    chatHistoryItem: {
       width: '100%',
       textAlign: 'left',
-      padding: '8px',
-      fontSize: '14px',
-      color: '#6b7280',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '4px',
+      padding: '12px',
+      borderBottom: '1px solid #e5e7eb',
       backgroundColor: 'transparent',
       border: 'none',
       borderRadius: '8px',
@@ -535,8 +966,27 @@ const handleSendMessage = async () => {
       marginBottom: '8px',
       transition: 'background-color 0.2s'
     },
-    suggestionHover: {
-      backgroundColor: '#f3f4f6'
+    chatHistoryItemActive: {
+      backgroundColor: '#eff6ff',
+      border: '1px solid #dbeafe'
+    },
+    chatHistoryItemTitle: {
+      fontSize: '14px',
+      fontWeight: '500',
+      color: '#111827',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
+    },
+    chatHistoryItemMeta: {
+      fontSize: '12px',
+      color: '#6b7280'
+    },
+    noChatHistory: {
+      fontSize: '14px',
+      color: '#6b7280',
+      textAlign: 'center',
+      padding: '20px'
     },
     mainArea: {
       flex: 1,
@@ -654,6 +1104,43 @@ const handleSendMessage = async () => {
       marginTop: '4px',
       opacity: 0.7
     },
+    suggestionBubble: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: '8px',
+      marginTop: '8px'
+    },
+    suggestionChip: {
+      padding: '4px 8px',
+      fontSize: '12px',
+      backgroundColor: '#e0f2fe',
+      color: '#0277bd',
+      border: 'none',
+      borderRadius: '12px',
+      cursor: 'pointer',
+      transition: 'background-color 0.2s'
+    },
+    suggestionChipHover: {
+      backgroundColor: '#b3e5fc'
+    },
+    sourcesSection: {
+      marginTop: '8px',
+      padding: '8px',
+      backgroundColor: '#f9fafb',
+      borderRadius: '8px',
+      borderLeft: '3px solid #2563eb'
+    },
+    sourcesTitle: {
+      fontSize: '12px',
+      fontWeight: '500',
+      color: '#374151',
+      marginBottom: '4px'
+    },
+    sourceItem: {
+      fontSize: '11px',
+      color: '#6b7280',
+      marginBottom: '2px'
+    },
     loadingMessage: {
       display: 'flex',
       justifyContent: 'flex-start'
@@ -731,27 +1218,81 @@ const handleSendMessage = async () => {
       color: '#6b7280',
       marginTop: '8px',
       textAlign: 'center'
+    },
+    searchResultsPanel: {
+      position: 'fixed',
+      bottom: '100px',
+      right: '24px',
+      width: '384px',
+      maxHeight: '384px',
+      overflowY: 'auto',
+      backgroundColor: 'white',
+      border: '1px solid #e5e7eb',
+      borderRadius: '12px',
+      boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+      zIndex: 50
+    },
+    searchResultsHeader: {
+      padding: '16px',
+      borderBottom: '1px solid #e5e7eb',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between'
+    },
+    searchResultsTitle: {
+      fontWeight: '600',
+      color: '#111827',
+      fontSize: '16px'
+    },
+    searchResultsContent: {
+      padding: '16px'
+    },
+    searchResultItem: {
+      padding: '12px',
+      border: '1px solid #e5e7eb',
+      borderRadius: '8px',
+      marginBottom: '12px',
+      cursor: 'pointer',
+      transition: 'background-color 0.2s'
+    },
+    searchResultItemHover: {
+      backgroundColor: '#f9fafb'
+    },
+    searchResultItemDesc: {
+      fontWeight: '500',
+      fontSize: '14px',
+      color: '#111827',
+      marginBottom: '4px'
+    },
+    searchResultItemDetail: {
+      fontSize: '14px',
+      color: '#6b7280',
+      marginBottom: '2px'
+    },
+    searchResultScore: {
+      fontSize: '12px',
+      color: '#9ca3af'
     }
   };
 
   return (
     <div style={styles.container}>
-      {/* Side */}
+      {/* Sidebar */}
       <div style={styles.sidebar}>
-        {/* Head */}
+        {/* Header */}
         <div style={styles.header}>
           <div style={styles.headerContent}>
             <div style={styles.logo}>
               <Icons.Bot />
             </div>
             <div>
-              <h1 style={styles.title}>Earl</h1>
+              <h1 style={styles.title}>EARL</h1>
               <p style={styles.subtitle}>MedMine AI Assistant</p>
             </div>
           </div>
         </div>
 
-        {/* uploadarea */}
+        {/* Upload Area */}
         <div style={styles.uploadSection}>
           <h3 style={styles.uploadTitle}>Data Upload</h3>
           <button
@@ -787,7 +1328,7 @@ const handleSendMessage = async () => {
           )}
         </div>
 
-        {/* preview */}
+        {/* Preview Section */}
         {showFilePreview && fileData && (
           <div style={styles.previewSection}>
             <div style={styles.previewHeader}>
@@ -805,7 +1346,7 @@ const handleSendMessage = async () => {
                   <tr>
                     {fileData && fileData.length > 0 && Object.keys(fileData[0])
                       .filter(key => key !== 'id')
-                      .slice(0, 4) // Show first 4 columns
+                      .slice(0, 4)
                       .map((key) => (
                         <th key={key} style={styles.th}>
                           {key.charAt(0).toUpperCase() + key.slice(1)}
@@ -814,8 +1355,8 @@ const handleSendMessage = async () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {fileData?.slice(0, 3).map((row) => (
-                      <tr key={row.id}>
+                    {fileData?.slice(0, 3).map((row, index) => (
+                      <tr key={row.id || index}>
                         {Object.keys(row)
                           .filter(key => key !== 'id')
                           .slice(0, 4)
@@ -837,42 +1378,130 @@ const handleSendMessage = async () => {
           </div>
         )}
 
-        {/* searching suggestion */}
-        <div style={styles.suggestionsSection}>
-          <h3 style={styles.suggestionsTitle}>Quick Questions</h3>
-          <div>
-            {querySuggestions.map((suggestion, index) => (
-              <button
-                key={index}
-                onClick={() => handleSuggestionClick(suggestion)}
-                style={styles.suggestion}
-                onMouseEnter={(e) => {
-                  (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
-                }}
-                onMouseLeave={(e) => {
-                  (e.target as HTMLButtonElement).style.backgroundColor = 'transparent';
-                }}
-              >
-                {suggestion}
-              </button>
-            ))}
+        {/* Chat History Section */}
+        <div style={styles.chatHistorySection}>
+          <h3 style={styles.chatHistoryTitle}>Chat History</h3>
+          <button
+            onClick={createNewChat}
+            style={styles.newChatButton}
+            onMouseEnter={(e) => {
+              (e.target as HTMLButtonElement).style.backgroundColor = '#dbeafe';
+            }}
+            onMouseLeave={(e) => {
+              (e.target as HTMLButtonElement).style.backgroundColor = '#eff6ff';
+            }}
+          >
+            + New Chat
+          </button>
+          <div style={styles.chatHistoryList}>
+            {chatHistory.length > 0 ? (
+              chatHistory.map((chat) => {
+                const isActive = chat.id === currentChatId;
+                return (
+                  <div
+                    key={chat.id}
+                    style={{
+                      ...styles.chatHistoryItem,
+                      ...(isActive ? { backgroundColor: '#eff6ff', border: '1px solid #dbeafe' } : {})
+                    }}
+                    onClick={() => loadChatSession(chat.id)}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = '#f3f4f6';
+                      }
+                      const deleteBtn = e.currentTarget.querySelector('.delete-btn');
+                      if (deleteBtn) (deleteBtn as HTMLElement).style.opacity = '1';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }
+                      const deleteBtn = e.currentTarget.querySelector('.delete-btn');
+                      if (deleteBtn) (deleteBtn as HTMLElement).style.opacity = '0';
+                    }}
+                  >
+                    <div style={styles.chatHistoryItemTitle}>
+                      {chat.title || 'Untitled Chat'}
+                    </div>
+                    <div style={styles.chatHistoryItemMeta}>
+                      {new Date(chat.created_at).toLocaleDateString()} - {chat.message_count} messages
+                    </div>
+                    <button
+                      className="delete-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteChatSession(chat.id);
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: '12px',
+                        right: '12px',
+                        padding: '4px',
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        color: '#6b7280',
+                        cursor: 'pointer',
+                        borderRadius: '4px',
+                        opacity: 0,
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.backgroundColor = '#fee2e2';
+                        e.currentTarget.style.color = '#dc2626';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        e.currentTarget.style.color = '#6b7280';
+                      }}
+                    >
+                      <Icons.Trash />
+                    </button>
+                  </div>
+                );
+              })
+            ) : (
+              <p style={styles.noChatHistory}>
+                No chat history yet
+              </p>
+            )}
           </div>
         </div>
       </div>
 
-      {/* main chart area */}
+      {/* Main Chat Area */}
       <div style={styles.mainArea}>
-        {/* chart head */}
+        {/* Chat Header */}
         <div style={styles.chatHeader}>
           <div style={styles.chatHeaderContent}>
             <div>
               <h2 style={styles.chatTitle}>Purchase Order Analysis</h2>
-              <p style={styles.chatSubtitle}>Ask Earl about your procurement data</p>
+              <p style={styles.chatSubtitle}>Ask EARL about your procurement data</p>
             </div>
             <div style={styles.chatActions}>
               <button
+                onClick={() => setShowSearchResults(!showSearchResults)}
                 style={styles.actionButton}
+
+                title="Toggle search results"
+
                 onClick={downloadChat}
+                title="Download chat history"
+
+                onMouseEnter={(e) => {
+                  (e.target as HTMLButtonElement).style.color = '#374151';
+                  (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
+                }}
+                onMouseLeave={(e) => {
+                  (e.target as HTMLButtonElement).style.color = '#6b7280';
+                  (e.target as HTMLButtonElement).style.backgroundColor = 'transparent';
+                }}
+              >
+                <Icons.Search />
+              </button>
+
+              <button
+                onClick={downloadChat}
+                style={styles.actionButton}
                 title="Download chat history"
                 onMouseEnter={(e) => {
                   (e.target as HTMLButtonElement).style.color = '#374151';
@@ -885,11 +1514,12 @@ const handleSendMessage = async () => {
               >
                 <Icons.Download />
               </button>
+
             </div>
           </div>
         </div>
 
-        {/* massage area */}
+        {/* Messages Area */}
         <div style={styles.messagesArea}>
           {messages.map((message) => (
             <div
@@ -912,7 +1542,8 @@ const handleSendMessage = async () => {
                         message.type === 'system' ? styles.avatarSystem : styles.avatarAssistant)
                   }}
                 >
-                  {message.type === 'user' ? <Icons.User /> : <Icons.Bot />}
+                  {message.type === 'user' ? <Icons.User /> : 
+                   message.type === 'system' ? <Icons.Database /> : <Icons.Bot />}
                 </div>
                 <div
                   style={{
@@ -922,6 +1553,50 @@ const handleSendMessage = async () => {
                   }}
                 >
                   <p style={styles.messageText}>{message.content}</p>
+                  
+                  {/* Suggestions */}
+                  {message.suggestions && message.suggestions.length > 0 && (
+                    <div style={styles.suggestionBubble}>
+                      {message.suggestions.map((suggestion, index) => (
+                        <button
+                          key={index}
+                          onClick={() => handleSuggestionClick(suggestion)}
+                          style={styles.suggestionChip}
+                          onMouseEnter={(e) => {
+                            (e.target as HTMLButtonElement).style.backgroundColor = '#b3e5fc';
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.target as HTMLButtonElement).style.backgroundColor = '#e0f2fe';
+                          }}
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* Sources */}
+                  {message.sources && message.sources.length > 0 && (
+                    <div style={styles.sourcesSection}>
+                      <p style={styles.sourcesTitle}>Sources:</p>
+                      <div>
+                        {message.sources.slice(0, 3).map((source, index) => (
+                          <div key={index} style={styles.sourceItem}>
+                            <span style={{fontWeight: '500'}}>{source.ItemDesc}</span>
+                            {source.Vendor && <span> • {source.Vendor}</span>}
+                            {source.TotalSpend && <span> • ${source.TotalSpend.toLocaleString()}</span>}
+                            {source.similarity && <span> • Score: {source.similarity.toFixed(3)}</span>}
+                          </div>
+                        ))}
+                        {message.sources.length > 3 && (
+                          <div style={styles.sourceItem}>
+                            +{message.sources.length - 3} more sources
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
                   <p style={styles.timestamp}>
                     {message.timestamp.toLocaleTimeString()}
                   </p>
@@ -933,7 +1608,7 @@ const handleSendMessage = async () => {
           {isLoading && (
             <div style={styles.loadingMessage}>
               <div style={styles.loadingContent}>
-                <div style={styles.avatarAssistant}>
+                <div style={{...styles.avatar, ...styles.avatarAssistant}}>
                   <Icons.Bot />
                 </div>
                 <div style={styles.loadingBubble}>
@@ -941,7 +1616,7 @@ const handleSendMessage = async () => {
                     <div style={styles.spinner}>
                       <Icons.Loader />
                     </div>
-                    <p style={{...styles.messageText, color: '#6b7280'}}>Earl is analyzing...</p>
+                    <p style={{...styles.messageText, color: '#6b7280'}}>EARL is analyzing...</p>
                   </div>
                 </div>
               </div>
@@ -950,7 +1625,7 @@ const handleSendMessage = async () => {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* input area */}
+        {/* Input Area */}
         <div style={styles.inputArea}>
           <div style={styles.inputContainer}>
             <div style={styles.inputWrapper}>
@@ -958,7 +1633,7 @@ const handleSendMessage = async () => {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Ask Earl about your purchase data..."
+                placeholder="Ask EARL anything about your purchase data - vendor analysis, spending patterns, item costs, facility comparisons..."
                 style={styles.textarea}
                 rows={3}
                 disabled={isLoading}
@@ -990,15 +1665,51 @@ const handleSendMessage = async () => {
                 }
               }}
             >
-              <span>Ask Earl</span>
+              <span>Ask EARL</span>
               <Icons.Send />
             </button>
           </div>
           <p style={styles.disclaimer}>
-            Earl can analyze your procurement data, compare vendors, and provide spending insights.
+            EARL can analyze your procurement data, compare vendors, and provide spending insights using natural language queries.
           </p>
         </div>
       </div>
+
+      {/* Search Results Panel */}
+      {showSearchResults && searchResults.length > 0 && (
+        <div style={styles.searchResultsPanel}>
+          <div style={styles.searchResultsHeader}>
+            <h3 style={styles.searchResultsTitle}>Search Results</h3>
+            <button 
+              onClick={() => setShowSearchResults(false)}
+              style={styles.closeButton}
+            >
+              <Icons.X />
+            </button>
+          </div>
+          <div style={styles.searchResultsContent}>
+            {searchResults.slice(0, 10).map((result, index) => (
+              <div 
+                key={index} 
+                style={styles.searchResultItem}
+                onMouseEnter={(e) => {
+                  (e.target as HTMLDivElement).style.backgroundColor = '#f9fafb';
+                }}
+                onMouseLeave={(e) => {
+                  (e.target as HTMLDivElement).style.backgroundColor = 'white';
+                }}
+              >
+                <div style={styles.searchResultItemDesc}>{result.ItemDesc}</div>
+                <div style={styles.searchResultItemDetail}>Vendor: {result.Vendor}</div>
+                <div style={styles.searchResultItemDetail}>Total: ${result.TotalSpend?.toLocaleString()}</div>
+                <div style={styles.searchResultScore}>
+                  Score: {(result.similarity || result["@search.score"] || 0).toFixed(3)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <style>
         {`
