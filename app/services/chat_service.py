@@ -2,6 +2,7 @@
 from app.services.embedding_service import embed_bulk_text
 from app.services.embedding_service import query_similar_embeddings
 from app.services.ai_service import generate_response
+from app.services.text_to_sql_service import get_text_to_sql_service
 from typing import Dict, Any, List
 import datetime
 import logging
@@ -11,64 +12,110 @@ logger = logging.getLogger(__name__)
 class ChatService:
     def __init__(self, top_k: int = 15):
         self.top_k = top_k
+        self.text_to_sql_service = get_text_to_sql_service()
+        
+        # Simplified, consistent system prompt
+        self.system_prompt = (
+            "You are Earl, an AI assistant specializing in supply chain management and procurement data analysis.\n\n"
+            
+            "RESPONSE FORMAT - CRITICAL:\n"
+            "- Use ONLY bullet points (-, *, or numbers)\n"
+            "- One key insight per line - be concise and direct\n" 
+            "- No paragraphs, explanations, or connecting phrases\n"
+            "- No phrases like 'based on the data' or 'according to the CSV'\n"
+            "- Start each bullet with the core insight immediately\n"
+            "- Maximum 4-5 bullet points per response\n"
+            "- Format currency as $X,XXX.XX\n"
+            "- No bold, italics, or markdown formatting\n\n"
+            
+            "DATA ANALYSIS FOCUS:\n"
+            "- Key metrics, totals, and spending patterns\n"
+            "- Vendor performance and rankings\n" 
+            "- Regional and facility comparisons\n"
+            "- Cost optimization opportunities\n\n"
+            
+            "If insufficient data is available, state: '- Insufficient data for this analysis'\n\n"
+        )
 
     def process_query(self, user_query: str) -> Dict[str, Any]:
         """
-        Process a user query using vector search and AI generation
+        Enhanced query processing with intelligent routing
         """
         try:
-            # Use the vector search service that works with SQL
-            top_chunks = query_similar_embeddings(user_query, top_k=self.top_k)
+            logger.info(f"Processing query: '{user_query}'")
             
-            if not top_chunks:
-                return {
-                    "answer": "I couldn't find relevant information to answer your question. Please try rephrasing your query or check if the database has been populated with data.",
-                    "sources": [],
-                    "timestamp": datetime.datetime.utcnow().isoformat()
-                }
-
-            # Build context string from returned metadata
-            context = self.build_context_string(top_chunks)
+            # First, try vector search for contextual data
+            vector_results = self._try_vector_search(user_query)
             
-            # Create prompt for AI
-            prompt = system_prompt = (
-    "You are Earl, an AI assistant specializing in supply chain management and procurement data analysis.\n\n"
-    "Your role is to help users analyze transaction data, vendor performance, and supply chain queries, especially from uploaded CSV files.\n\n"
-    "When CSV data is provided, you have access to the entire dataset, including:\n"
-    "- Statistical summaries (e.g., totals, averages, min/max values)\n"
-    "- Top values per category\n"
-    "- Sample records (top and bottom rows)\n"
-    "- Column breakdowns and data distributions\n\n"
-    "Always reference real data points when possible. Focus on:\n"
-    "1. Key Metrics & Totals — costs, units, frequencies\n"
-    "2. Vendor Analysis — top vendors by spend, orders, frequency\n"
-    "3. Department or Category Breakdowns — usage, spend, volume\n"
-    "4. Trend Identification — monthly or quarterly shifts, anomalies\n"
-    "5. Cost Analysis — savings opportunities, high-cost items\n"
-    "6. Data Quality Observations — missing values, inconsistencies\n\n"
-    "Always reference specific data points from the analysis when possible."
-    "Respond in a friendly yet professional tone. Your insights should be actionable and easy to understand, "
-    "tailored for supply chain managers or procurement officers.\n"
-    "Avoid vague or generic analysis — always anchor your insights in the actual data provided."
-    "Do not use formatting like bold, italics, or markdown symbols in your response."
-    "Give straight answers only, no explanations until asked for one"
-    "Each point must contain only one peice of information"
-    "When asked for 'top' or 'most', look for numerical fields and sort descending. Always return concise ranked results using bullet points."
-    "keep it consise and direct, avoid full paragraphs until specifically mentioned "
-    "Do not mix multiple insight types in one sentence. Use bullet points or numbered lists where necessary for clarity.\n"
-    "If data is incomplete or unclear, mention that explicitly and suggest what additional information would help improve the analysis.\n"
-    "Do not repeat the user's question in your response. Focus only on the analysis.\n"
-    "You may end with a short friendly suggestion or follow-up."
-    "You will remain in this role across all interactions. If the user asks a follow-up question, treat it as a continuation of the previous context unless otherwise specified.\n"
-    "If no CSV data has been uploaded or available context is missing, let the user know politely and ask them to upload a file to proceed with the analysis."
-    "Do not list or cite your data sources explicitly. Avoid phrases like 'according to the data' or 'based on the uploaded CSV.'"
-    "Do not list or cite your data sources explicitly."
-    "Use newline-formatted bullet points (e.g., '-', '*', or numbered '1.', '2.', etc.) with one insight per line.\n"
-    "Do not write multiple points in one sentence. Each insight must appear on a new line."
-    "Use only the fields explicitly tagged for the relevant query type. "
-    "For example, for vendor-related questions, use fields tagged as 'vendor_name'. "
-    "If context does not contain enough tagged information, say so.\n\n"
+            # Determine if this looks like a SQL-based analytics query
+            if self._is_analytics_query(user_query):
+                logger.info("Routing to TextToSQL service for analytics")
+                return self._route_to_sql_service(user_query, vector_results)
+            
+            # Handle as vector-based query if we have results
+            if vector_results:
+                logger.info("Processing as vector-based query")
+                return self._process_vector_query(user_query, vector_results)
+            
+            # Fallback: try SQL service anyway
+            logger.info("No vector results, falling back to SQL service")
+            return self._route_to_sql_service(user_query, [])
+            
+        except Exception as e:
+            logger.error(f"Error processing query: {e}")
+            return self._error_response(str(e))
 
+    def _try_vector_search(self, user_query: str) -> List[Dict[str, Any]]:
+        """Try vector search and return results or empty list"""
+        try:
+            return query_similar_embeddings(user_query, top_k=self.top_k)
+        except Exception as e:
+            logger.warning(f"Vector search failed: {e}")
+            return []
+
+    def _is_analytics_query(self, query: str) -> bool:
+        """Determine if query should be routed to SQL analytics"""
+        q = query.lower()
+        
+        # Keywords that suggest SQL analytics
+        sql_keywords = [
+            'total', 'sum', 'average', 'count', 'top', 'bottom', 'most', 'least',
+            'vendor', 'facility', 'region', 'spend', 'cost', 'compare', 'trend',
+            'how many', 'which', 'what are', 'show me', 'list', 'breakdown'
+        ]
+        
+        return any(keyword in q for keyword in sql_keywords)
+
+    def _route_to_sql_service(self, user_query: str, vector_context: List[Dict]) -> Dict[str, Any]:
+        """Route query to TextToSQL service and format response"""
+        try:
+            # Get SQL service response
+            sql_response = self.text_to_sql_service.analyze_supply_chain_query(user_query)
+            
+            # Convert to ChatService format for consistency
+            return {
+                "answer": sql_response.get("insights", "- No insights available"),
+                "sources": self._format_sql_sources(sql_response),
+                "timestamp": datetime.datetime.utcnow().isoformat(),
+                "context_used": True,
+                "query_type": "sql_analytics",
+                "sql_query": sql_response.get("sql_query"),
+                "recommendations": sql_response.get("recommendations", [])
+            }
+            
+        except Exception as e:
+            logger.error(f"SQL service routing failed: {e}")
+            return self._error_response(f"Analytics service error: {str(e)}")
+
+    def _process_vector_query(self, user_query: str, vector_results: List[Dict]) -> Dict[str, Any]:
+        """Process query using vector search results"""
+        try:
+            # Build context string from vector results
+            context = self._build_context_string(vector_results)
+            
+            # Create prompt using improved system prompt
+            prompt = (
+                f"{self.system_prompt}"
                 f"Context:\n{context}\n\n"
                 f"Question: {user_query}\n"
                 f"Answer:"
@@ -79,120 +126,88 @@ class ChatService:
 
             return {
                 "answer": answer.strip(),
-                "sources": [chunk['metadata'] for chunk in top_chunks],
+                "sources": [chunk['metadata'] for chunk in vector_results],
                 "timestamp": datetime.datetime.utcnow().isoformat(),
-                "context_used": len(top_chunks) > 0
+                "context_used": True,
+                "query_type": "vector_search"
             }
             
         except Exception as e:
-            logger.error(f"Error processing query: {e}")
-            return {
-                "answer": "I'm sorry, I encountered an error while processing your request. Please try again later.",
-                "sources": [],
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "error": str(e)
-            }
+            logger.error(f"Vector query processing failed: {e}")
+            return self._error_response(str(e))
 
-    def build_context_string(self, chunks: List[Dict[str, Any]]) -> str:
-        """
-        Build a context string from search results
-        """
+    def _build_context_string(self, chunks: List[Dict[str, Any]]) -> str:
+        """Build a concise context string from search results"""
+        if not chunks:
+            return "No relevant context found."
+            
         context_list = []
         
-        for i, chunk in enumerate(chunks, 1):
+        for i, chunk in enumerate(chunks[:10], 1):  # Limit to top 10
             metadata = chunk.get('metadata', {})
-            similarity = chunk.get('similarity', 0)
             
             # Extract key fields from metadata
             item_desc = metadata.get('item_desc', 'N/A')
             vendor = metadata.get('vendor', 'N/A')
-            facility_type = metadata.get('facility_type', 'N/A')
             total_spend = metadata.get('total_spend', 0)
-            department = metadata.get('department', 'N/A')
-            category = metadata.get('category', 'N/A')
+            facility_type = metadata.get('facility_type', 'N/A')
             
-            # Format the context entry
-            context_entry = (
-                f"{i}. Item: {item_desc} | "
-                f"Vendor: {vendor} | "
-                f"Facility: {facility_type} | "
-                f"Department: {department} | "
-                f"Category: {category} | "
-                f"Spend: ${total_spend:,.2f} | "
-                f"Relevance: {similarity:.3f}"
-            )
-            
+            # Create concise context entry
+            context_entry = f"{i}. {item_desc} | {vendor} | ${total_spend:,.2f} | {facility_type}"
             context_list.append(context_entry)
 
         return "\n".join(context_list)
 
+    def _format_sql_sources(self, sql_response: Dict) -> List[Dict]:
+        """Format SQL response sources for consistency"""
+        sources = []
+        
+        if sql_response.get("sql_query"):
+            sources.append({
+                "source": "sql_database",
+                "query": sql_response["sql_query"],
+                "result_count": sql_response.get("result_count", 0)
+            })
+            
+        return sources
+
     def process_csv_query(self, user_query: str, csv_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Process a query that includes CSV data
+        Process a query with uploaded CSV data using improved formatting
         """
         try:
-            # Get vector search results
-            vector_results = query_similar_embeddings(user_query, top_k=self.top_k)
+            logger.info(f"Processing CSV query: '{user_query}'")
             
-            # Build context from both vector search and CSV
+            # Get vector search results for additional context
+            vector_results = self._try_vector_search(user_query)
+            
+            # Build combined context
             context_parts = []
             
+            # Add vector context if available
             if vector_results:
-                vector_context = self.build_context_string(vector_results)
-                context_parts.append(f"Database Knowledge:\n{vector_context}")
+                vector_context = self._build_context_string(vector_results)
+                context_parts.append(f"Database Context:\n{vector_context}")
             
-            # Add CSV analysis
-            csv_context = self._analyze_csv_data(csv_data, user_query)
+            # Add CSV analysis using improved format
+            csv_context = self._analyze_csv_data_bullets(csv_data, user_query)
             if csv_context:
-                context_parts.append(f"Uploaded Data:\n{csv_context}")
+                context_parts.append(f"Uploaded Data Analysis:\n{csv_context}")
             
             if not context_parts:
                 return {
-                    "answer": "I couldn't find relevant data to answer your question.",
+                    "answer": "- No relevant data found to answer your question",
                     "sources": [],
-                    "timestamp": datetime.datetime.utcnow().isoformat()
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                    "query_type": "csv_analysis"
                 }
             
             # Combine contexts
             full_context = "\n\n".join(context_parts)
             
-            prompt = system_prompt = (
-    "You are Earl, an AI assistant specializing in supply chain management and procurement data analysis.\n\n"
-    "Your role is to help users analyze transaction data, vendor performance, and supply chain queries, especially from uploaded CSV files.\n\n"
-    "When CSV data is provided, you have access to the entire dataset, including:\n"
-    "- Statistical summaries (e.g., totals, averages, min/max values)\n"
-    "- Top values per category\n"
-    "- Sample records (top and bottom rows)\n"
-    "- Column breakdowns and data distributions\n\n"
-    "Always reference real data points when possible. Focus on:\n"
-    "1. Key Metrics & Totals — costs, units, frequencies\n"
-    "2. Vendor Analysis — top vendors by spend, orders, frequency\n"
-    "3. Department or Category Breakdowns — usage, spend, volume\n"
-    "4. Trend Identification — monthly or quarterly shifts, anomalies\n"
-    "5. Cost Analysis — savings opportunities, high-cost items\n"
-    "6. Data Quality Observations — missing values, inconsistencies\n\n"
-    "Always reference specific data points from the analysis when possible."
-    "Respond in a friendly yet professional tone. Your insights should be actionable and easy to understand, "
-    "tailored for supply chain managers or procurement officers.\n"
-    "Avoid vague or generic analysis — always anchor your insights in the actual data provided."
-    "Do not use formatting like bold, italics, or markdown symbols in your response."
-    "Give straight answers only, no explanations until asked for one"
-    "Each point must contain only one peice of information"
-    "When asked for 'top' or 'most', look for numerical fields and sort descending. Always return concise ranked results using bullet points."
-    "keep it consise and direct, avoid full paragraphs until specifically mentioned "
-    "Do not mix multiple insight types in one sentence. Use bullet points or numbered lists where necessary for clarity.\n"
-    "If data is incomplete or unclear, mention that explicitly and suggest what additional information would help improve the analysis.\n"
-    "Do not repeat the user's question in your response. Focus only on the analysis.\n"
-    "You may end with a short friendly suggestion or follow-up."
-    "You will remain in this role across all interactions. If the user asks a follow-up question, treat it as a continuation of the previous context unless otherwise specified.\n"
-    "If no CSV data has been uploaded or available context is missing, let the user know politely and ask them to upload a file to proceed with the analysis."
-    "Do not list or cite your data sources explicitly. Avoid phrases like 'according to the data' or 'based on the uploaded CSV.'"
-    "Do not list or cite your data sources explicitly."
-    "Use newline-formatted bullet points (e.g., '-', '*', or numbered '1.', '2.', etc.) with one insight per line.\n"
-    "Do not write multiple points in one sentence. Each insight must appear on a new line."
-    "Use only the fields explicitly tagged for the relevant query type. "
-    "For example, for vendor-related questions, use fields tagged as 'vendor_name'. "
-    "If context does not contain enough tagged information, say so.\n\n"
+            # Use improved system prompt
+            prompt = (
+                f"{self.system_prompt}"
                 f"Context:\n{full_context}\n\n"
                 f"Question: {user_query}\n"
                 f"Answer:"
@@ -215,26 +230,22 @@ class ChatService:
                 "answer": answer.strip(),
                 "sources": sources,
                 "timestamp": datetime.datetime.utcnow().isoformat(),
-                "context_used": True
+                "context_used": True,
+                "query_type": "csv_analysis"
             }
             
         except Exception as e:
             logger.error(f"Error processing CSV query: {e}")
-            return {
-                "answer": "I'm sorry, I encountered an error while processing your request with the uploaded data.",
-                "sources": [],
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-                "error": str(e)
-            }
+            return self._error_response(f"CSV analysis error: {str(e)}")
 
-    def _analyze_csv_data(self, csv_data: Dict[str, Any], query: str) -> str:
+    def _analyze_csv_data_bullets(self, csv_data: Dict[str, Any], query: str) -> str:
         """
-        Analyze uploaded CSV data for context
+        Analyze uploaded CSV data and return bullet-point format
         """
         if not csv_data or not csv_data.get('data'):
             return ""
             
-        analysis = []
+        bullets = []
         
         # Basic stats
         filename = csv_data.get('filename', 'unknown')
@@ -242,36 +253,84 @@ class ChatService:
         headers = csv_data.get('headers', [])
         data = csv_data.get('data', [])
         
-        analysis.append(f"File: {filename}")
-        analysis.append(f"Rows: {row_count}")
-        analysis.append(f"Columns: {', '.join(headers)}")
+        bullets.append(f"- CSV file: {filename} ({row_count} rows, {len(headers)} columns)")
         
-        # Dynamic analysis based on query and available data
+        # Dynamic analysis based on query
         query_lower = query.lower()
         
         try:
             # Spending analysis
             if any(word in query_lower for word in ['total', 'sum', 'spend', 'cost']):
-                spend_columns = [col for col in headers if 'spend' in col.lower() or 'cost' in col.lower() or 'price' in col.lower()]
-                for col in spend_columns:
+                spend_columns = [col for col in headers if any(term in col.lower() for term in ['spend', 'cost', 'price', 'amount'])]
+                for col in spend_columns[:2]:  # Limit to first 2 spend columns
                     values = [float(row.get(col, 0) or 0) for row in data if row.get(col)]
                     if values:
-                        analysis.append(f"Total {col}: ${sum(values):,.2f}")
-                        analysis.append(f"Average {col}: ${sum(values)/len(values):,.2f}")
+                        total_spend = sum(values)
+                        avg_spend = total_spend / len(values)
+                        bullets.append(f"- {col} total: ${total_spend:,.2f} (avg: ${avg_spend:,.2f})")
             
             # Vendor analysis
-            if 'vendor' in query_lower and 'vendor' in headers:
-                vendors = list(set(row.get('vendor', '') for row in data if row.get('vendor')))
-                analysis.append(f"Unique vendors: {len(vendors)}")
-                if len(vendors) <= 10:  # Show vendors if not too many
-                    analysis.append(f"Vendors: {', '.join(vendors)}")
+            if 'vendor' in query_lower:
+                vendor_cols = [col for col in headers if 'vendor' in col.lower() or 'supplier' in col.lower()]
+                for col in vendor_cols[:1]:  # Just first vendor column
+                    vendors = [row.get(col, '') for row in data if row.get(col)]
+                    unique_vendors = len(set(vendors))
+                    if unique_vendors > 0:
+                        bullets.append(f"- {unique_vendors} unique vendors in {col}")
             
-            # Department analysis
-            if 'department' in query_lower and 'department' in headers:
-                departments = list(set(row.get('department', '') for row in data if row.get('department')))
-                analysis.append(f"Departments: {', '.join(departments)}")
-                
+            # Category/Department analysis
+            if any(term in query_lower for term in ['department', 'category', 'type']):
+                cat_cols = [col for col in headers if any(term in col.lower() for term in ['department', 'category', 'type'])]
+                for col in cat_cols[:1]:  # Just first category column
+                    categories = [row.get(col, '') for row in data if row.get(col)]
+                    unique_cats = len(set(categories))
+                    if unique_cats > 0:
+                        bullets.append(f"- {unique_cats} unique {col.lower()}s identified")
+                        
         except Exception as e:
             logger.warning(f"Error analyzing CSV data: {e}")
+            bullets.append("- CSV analysis partially completed due to data format issues")
         
-        return "\n".join(analysis) if analysis else "No specific analysis available for uploaded data."
+        return "\n".join(bullets) if bullets else ""
+
+    def _error_response(self, error: str) -> Dict[str, Any]:
+        """Return standardized error response"""
+        return {
+            "answer": "- Unable to process your request at this time\n- Please try rephrasing your question or check your data",
+            "sources": [],
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "error": error,
+            "query_type": "error"
+        }
+
+    def get_query_suggestions(self) -> List[str]:
+        """Provide helpful query suggestions for users"""
+        return [
+            "Show me the top 5 vendors by total spend",
+            "Which regions have the highest procurement costs?",
+            "Compare spending across different facility types",
+            "What are the most expensive items purchased?",
+            "Analyze monthly spending trends",
+            "List all vendors with spend over $10,000"
+        ]
+
+    def get_system_status(self) -> Dict[str, Any]:
+        """Return system status for debugging"""
+        try:
+            # Check if SQL service is available
+            sql_available = self.text_to_sql_service._has_data()
+            
+            # Check if vector service is available
+            vector_test = self._try_vector_search("test")
+            vector_available = len(vector_test) > 0
+            
+            return {
+                "sql_service_available": sql_available,
+                "vector_service_available": vector_available,
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }
+        except Exception as e:
+            return {
+                "error": str(e),
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }
