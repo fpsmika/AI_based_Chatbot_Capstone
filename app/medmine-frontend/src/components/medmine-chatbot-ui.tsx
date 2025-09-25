@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { CSSProperties } from 'react';
 
+
 const Icons = {
   Send: () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -171,6 +172,7 @@ const MedMineChatbot = () => {
   const [isInitializing, setIsInitializing] = useState(false);
   const initializedRef = useRef(false);
 
+
   useEffect(() => {
     const initializeChat = async () => {
       if (initializedRef.current) return;
@@ -339,6 +341,98 @@ const MedMineChatbot = () => {
     }
   };
 
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  // Validate file type
+  const allowedTypes = ['.csv', '.xlsx', '.xls'];
+  const fileExtension = file.name.toLowerCase().substring(file.name.lastIndexOf('.'));
+  
+  if (!allowedTypes.includes(fileExtension)) {
+    const errorMessage = {
+      id: Date.now(),
+      type: 'system',
+      content: `File type not supported. Please upload a CSV or Excel (.xlsx, .xls) file.`,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, errorMessage]);
+    return;
+  }
+
+  setUploadedFile(file);
+  
+  // Show upload in progress message
+  const uploadingMessage = {
+    id: Date.now(),
+    type: 'system',
+    content: `Uploading "${file.name}"... Please wait.`,
+    timestamp: new Date()
+  };
+  setMessages(prev => [...prev, uploadingMessage]);
+
+  try {
+    // Create FormData to send file to backend
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // Send file to backend for processing
+    const response = await fetch('http://localhost:8000/api/v1/process', {
+      method: 'POST',
+      body: formData, 
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    
+    // Check if backend returned success
+    if (result.status !== 'success') {
+      throw new Error(result.message || 'Backend processing failed');
+    }
+
+    // Store the processed data from backend
+    const processedData = result.data || [];
+    
+    // Convert backend format to frontend format if needed
+    const formattedData = processedData.map((row: Record<string, string>, index: number) => ({
+      id: String(index + 1),
+      ...row
+    }));
+
+    setFileData(formattedData);
+    setShowFilePreview(true);
+    
+    // Success message
+    const successMessage = {
+      id: Date.now() + 1,
+      type: 'system',
+      content: `File "${file.name}" processed successfully. ${processedData.length} records loaded.`,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev.slice(0, -1), successMessage]); // Replace uploading message
+    
+  } catch (error) {
+    console.error('File upload error:', error);
+    
+    const errorMessage = {
+      id: Date.now() + 1,
+      type: 'system',
+      content: `Error processing file "${file.name}": ${error instanceof Error ? error.message : 'Unknown error'}`,
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev.slice(0, -1), errorMessage]); // Replace uploading message
+    
+    // Clear file state on error
+    setUploadedFile(null);
+    setFileData(null);
+    setShowFilePreview(false);
+  }
+};
+
+
   const deleteChatSession = async (chatId: string) => {
     if (window.confirm('Are you sure you want to delete this chat?')) {
       try {
@@ -384,6 +478,7 @@ const MedMineChatbot = () => {
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
 
     let chatId = currentChatId;
     if (!chatId) {
@@ -443,6 +538,10 @@ const MedMineChatbot = () => {
 
       const { batch_id, rows_loaded } = json;
 
+const handleSendMessage = async () => {
+  if (!inputValue.trim()) return;
+
+
       // 2) Notify user
       const successMsg = {
         id: Date.now(),
@@ -469,6 +568,7 @@ const MedMineChatbot = () => {
         })
       });
 
+
       setCurrentBatch(batch_id);
       setTotalRows(rows_loaded);
 
@@ -494,6 +594,25 @@ const MedMineChatbot = () => {
           console.warn('Could not create file preview:', previewError);
         }
       }
+
+  try {
+    // Prepare the request payload with CSV data if available
+    const payload = {
+      message: inputValue,
+      session_id: sessionId,
+      // Include CSV data if available
+      csv_data: fileData ? {
+        filename: uploadedFile?.name || 'uploaded_file.csv',
+        headers: fileData.length > 0 ? Object.keys(fileData[0]).filter(key => key !== 'id') : [],
+        data: fileData.map((row) => {
+          const rowCopy = { ...row };
+          delete rowCopy.id;
+          return rowCopy;
+        }),
+        row_count: fileData.length
+      } : null
+    };
+
 
     } catch (err) {
       console.error(err);
@@ -634,6 +753,32 @@ const MedMineChatbot = () => {
       handleSendMessage();
     }
   };
+
+
+  const downloadChat = () => {
+    // Create chat content
+    const chatContent = messages.map(msg => {
+      const timestamp = msg.timestamp.toLocaleString();
+      const sender = msg.type === 'user' ? 'You' : msg.type === 'assistant' ? 'Earl' : 'System';
+      return `[${timestamp}] ${sender}: ${msg.content}`;
+    }).join('\n\n');
+
+    // Add header
+    const header = `MedMine Chat Export\nDate: ${new Date().toLocaleString()}\n${uploadedFile ? `Data File: ${uploadedFile.name}` : 'No data file uploaded'}\n${'='.repeat(50)}\n\n`;
+    const fullContent = header + chatContent;
+
+    // Create blob and download
+    const blob = new Blob([fullContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `medmine-chat-${new Date().toISOString().split('T')[0]}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
 
   const styles: Record<string, CSSProperties> = {
     container: {
@@ -1336,7 +1481,12 @@ const MedMineChatbot = () => {
               <button
                 onClick={() => setShowSearchResults(!showSearchResults)}
                 style={styles.actionButton}
+
                 title="Toggle search results"
+
+                onClick={downloadChat}
+                title="Download chat history"
+
                 onMouseEnter={(e) => {
                   (e.target as HTMLButtonElement).style.color = '#374151';
                   (e.target as HTMLButtonElement).style.backgroundColor = '#f3f4f6';
@@ -1348,6 +1498,7 @@ const MedMineChatbot = () => {
               >
                 <Icons.Search />
               </button>
+
               <button
                 onClick={downloadChat}
                 style={styles.actionButton}
@@ -1363,6 +1514,7 @@ const MedMineChatbot = () => {
               >
                 <Icons.Download />
               </button>
+
             </div>
           </div>
         </div>
