@@ -160,6 +160,8 @@ ADVANCED GUIDELINES:
 - For comparisons: Include multiple metrics (spend, count, averages)
 - Handle NULL values with WHERE column IS NOT NULL when appropriate
 - For trends over time: GROUP BY Year, Month or just Year
+- Use SQL Server syntax: TOP N instead of LIMIT N
+- For limiting results: SELECT TOP N ... not SELECT ... LIMIT N
 
 FLEXIBLE MAPPINGS:
 - "vendors/suppliers/companies" → Vendor
@@ -175,6 +177,7 @@ EXAMPLE PATTERNS:
 - "Average spend by region" → SELECT Region, AVG(TotalSpend) as AverageSpend FROM supply_records WHERE Region IS NOT NULL GROUP BY Region ORDER BY AverageSpend DESC
 - "Count of items" → SELECT COUNT(DISTINCT ItemDesc) as ItemCount FROM supply_records WHERE ItemDesc IS NOT NULL
 - "Monthly trends in 2022" → SELECT Month, SUM(TotalSpend) as TotalSpend FROM supply_records WHERE Year = 2022 GROUP BY Month ORDER BY Month
+- "Top 5 vendors by spend" → SELECT TOP 5 Vendor, SUM(TotalSpend) as TotalSpend FROM supply_records WHERE Vendor IS NOT NULL GROUP BY Vendor ORDER BY TotalSpend DESC
 
 Be creative and flexible in interpreting the question. The user might ask about trends, comparisons, rankings, totals, averages, or specific details.
 
@@ -369,7 +372,7 @@ SQL:"""
                     vendor = vendor_match.group(2)
                     return f"SELECT * FROM supply_records WHERE Vendor LIKE '%{vendor}%'"
             elif 'facility' in q:
-                return "SELECT * FROM supply_records LIMIT 10"
+                return "SELECT TOP 10 * FROM supply_records WHERE FacilityID IS NOT NULL"
         
         return None
 
@@ -446,7 +449,9 @@ RESPONSE FORMAT - CRITICAL:
 - No paragraphs, explanations, or connecting phrases
 - No phrases like 'based on the data', 'according to', 'here's what', 'it's interesting to note'
 - Start each bullet with the core insight immediately
-- Maximum 4-5 bullet points per response (keep it short)
+- Maximum 10 bullet points per response (keep it short)
+- When explicitly asked for a full list (vendors, manufacturers), provide ALL results from the query
+- ONLY return data that exists in the database query results
 - Format currency as $X,XXX.XX and percentages as X%
 - No bold, italics, or markdown formatting
 - Extract only the most important findings
@@ -473,16 +478,22 @@ RESPONSE:"""
 
     def _calculate_response_tokens(self, question: str, results: List[Dict]) -> int:
         """Calculate appropriate token count for response."""
-        base_tokens = 200
+        #base_tokens = 200
         
-        if len(results) > 15:
-            return 400
-        elif any(word in question.lower() for word in ['list', 'show', 'all', 'compare']):
-            return 350
-        elif len(results) == 1 and len(str(results[0])) > 200:
-            return 300
+        #if len(results) > 15:
+            #return 400
+        #elif any(word in question.lower() for word in ['list', 'show', 'all', 'compare']):
+            #return 350
+       # elif len(results) == 1 and len(str(results[0])) > 200:
+            #return 300
         
-        return base_tokens
+        #return base_tokens
+
+        # Estimate result size in tokens (rough approximation)
+        result_text_length = len(str(results))
+        estimated_result_tokens = result_text_length // 4
+        target_tokens = max(300, estimated_result_tokens * 2)  # At least 300 tokens
+        return min(target_tokens, 1000) 
 
     def _create_enhanced_data_preview(self, results: List[Dict], question: str) -> str:
         """Create comprehensive data preview optimized for the question type."""
@@ -524,7 +535,7 @@ RESPONSE:"""
 
     def _format_multiple_results(self, results: List[Dict], question_lower: str) -> str:
         """Format multiple results intelligently."""
-        if len(results) <= 25:
+        if len(results) <= 60:
             return self._format_detailed_list(results)
         else:
             return self._format_summary_with_top_items(results)
