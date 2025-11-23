@@ -42,10 +42,15 @@ class Settings(BaseSettings):
     BLOB_CONTAINER_NAME: str = "raw-upload"
     
     # AI/LLM Configuration (matching your .env)
-    OPENROUTER_API_KEY: str = ""
-    LLAMA_MODEL: str = "google/gemma-3-27b-it:free"
-    OPENROUTER_MODEL: str = "anthropic/claude-3-haiku"  # Keep for backward compatibility
-    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    AZURE_OPENAI_API_KEY: str = ""
+    AZURE_OPENAI_ENDPOINT: str = ""
+    AZURE_OPENAI_DEPLOYMENT: str = ""
+    AZURE_OPENAI_API_VERSION: str = ""
+    
+    #OPENROUTER_API_KEY: str = ""
+    #LLAMA_MODEL: str = "google/gemma-3-27b-it:free"
+    #OPENROUTER_MODEL: str = "anthropic/claude-3-haiku"  # Keep for backward compatibility
+    #OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     
     
     
@@ -147,8 +152,8 @@ def validate_settings():
         errors.append("Database configuration incomplete. Check SQL_* or DATABASE_URL environment variables.")
     
     # Check LLM configuration
-    if not settings.OPENROUTER_API_KEY:
-        errors.append("LLM configuration incomplete. Check OPENROUTER_API_KEY environment variable.")
+    if not settings.AZURE_OPENAI_API_KEY or not settings.AZURE_OPENAI_ENDPOINT:
+        errors.append("LLM configuration incomplete. Check OPENAI_API_KEY environment variable.")
     
     if errors:
         error_msg = "\n".join(f"  - {error}" for error in errors)
