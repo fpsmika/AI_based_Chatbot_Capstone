@@ -47,12 +47,7 @@ class Settings(BaseSettings):
     OPENROUTER_MODEL: str = "anthropic/claude-3-haiku"  # Keep for backward compatibility
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     
-    # Cosmos DB (keeping for compatibility even though not used)
-    COSMOS_DB_ENDPOINT: str = ""
-    COSMOS_DB_KEY: str = ""
-    COSMOS_DB_DATABASE: str = ""
-    COSMOS_DB_CONTAINER: str = ""
-    COSMOS_DB_VECTOR_CONTAINER: str = ""
+    
     
     # Logging (matching your .env)
     LOG_LEVEL: str = "INFO"

@@ -234,64 +234,7 @@ def llama_health_check():
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Llama API unavailable: {str(e)}")
 
-@app.get("/transactions")
-def list_transactions(db: Session = Depends(get_db)):
-    """Legacy endpoint - consider deprecating"""
-    return db.query(Transaction).limit(100).all()
 
-@app.get("/api/v1/transactions")
-def get_transactions(
-    skip: int = 0,
-    limit: int = 100,
-    year: int = None,
-    vendor: str = None,
-    db: Session = Depends(get_db)
-):
-    """Improved transaction endpoint with filtering"""
-    query = db.query(Transaction)
-    
-    if year:
-        query = query.filter(Transaction.Year == year)
-    if vendor:
-        query = query.filter(Transaction.Vendor.ilike(f"%{vendor}%"))
-    
-    return query.offset(skip).limit(limit).all()
-
-@app.get("/api/v1/transactions/analytics")
-async def get_analytics(
-    question: str = Query("Show me vendor transaction summary", description="Natural language question"),
-    db: Session = Depends(get_db)
-):
-    """Analytics using natural language to SQL conversion"""
-    try:
-        from app.services.text_to_sql_service import get_text_to_sql_service
-        
-        text_to_sql = get_text_to_sql_service()
-        result = text_to_sql.analyze_supply_chain_query(question)
-        
-        if not result["success"]:
-            return {"error": result.get("error"), "insights": result["insights"]}
-        
-        return {
-            "question": question,
-            "insights": result["insights"],
-            "data_summary": result["data_summary"],
-            "recommendations": result["recommendations"]
-        }
-        
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.get("/api/v1/transactions/{transaction_id}")
-def get_transaction(
-    transaction_id: str,
-    db: Session = Depends(get_db)
-):
-    """Get single transaction by ID"""
-    transaction = db.query(Transaction).filter(Transaction.TransactionID == transaction_id).first()
-    if not transaction:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    return transaction
 
 
 # Add a simple chat test endpoint
