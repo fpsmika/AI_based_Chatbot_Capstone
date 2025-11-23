@@ -12,5 +12,6 @@ class AzureSQLConnector:
             f"Pwd={settings.SQL_PASSWORD};"
             f"Encrypt=yes;"
             f"TrustServerCertificate=no;"
+            f"Command Timeout=600;"
         )
         return pyodbc.connect(conn_str)

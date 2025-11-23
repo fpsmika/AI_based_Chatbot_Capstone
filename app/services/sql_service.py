@@ -26,8 +26,8 @@ class SQLService:
             f"Uid={settings.SQL_USERNAME};"
             f"Pwd={settings.SQL_PASSWORD};"
             f"Encrypt=yes;TrustServerCertificate=no;"
-            f"Connection Timeout=60;"
-            f"Command Timeout=120;"
+            f"Connection Timeout=90;"
+            f"Command Timeout=600;"
             f"Login Timeout=30;"
             f"ConnectRetryCount=3;"
             f"ConnectRetryInterval=10;"
@@ -46,9 +46,9 @@ class SQLService:
                     logger.info(f"Attempting SQL connection (attempt {attempt + 1}/{max_retries})")
                     connection = pyodbc.connect(
                         self.conn_str,
-                        timeout=30
+                        
                     )
-                    connection.timeout = 120
+                    connection.timeout = 300
                     connection.autocommit = False
                     logger.info("✅ SQL connection established successfully")
                     

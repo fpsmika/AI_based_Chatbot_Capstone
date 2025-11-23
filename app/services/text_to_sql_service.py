@@ -152,7 +152,7 @@ SCHEMA:
 ADVANCED GUIDELINES:
 - Use ONLY columns that exist in the schema above
 - Return a single SELECT statement only
-- For text searches, use LIKE with wildcards (%) and be case-insensitive
+- For text searches, use LIKE with ONLY trailing wildcards (e.g., LIKE 'search%'). Include "AND column IS NOT NULL" to filter out NULLs.
 - For dates: Year (int 1-9999), Month (int 1-12)
 - For aggregations: SUM() for totals, COUNT() for counts, AVG() for averages
 - For rankings: ORDER BY with TOP N
