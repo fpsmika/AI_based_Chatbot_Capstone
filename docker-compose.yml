@@ -1,12 +1,12 @@
 
 
 services:
-  aibasedchatbotcapstone:
+  backend:
     container_name: chatbot-backend
     build:
       context: .
       dockerfile: Dockerfile
-    image: aibasedchatbotcapstone
+    image: aibasedchatbotcapstone-backend
     env_file:
       - .env
     environment:
@@ -14,5 +14,22 @@ services:
       - PYTHONUNBUFFERED=1
     ports:
       - "8000:8000"
+    networks:
+      - chatbot-network
    
-    
+  frontend:
+      container_name: chatbot-frontend
+      build:
+        context: ./app/medmine-frontend
+        dockerfile: Dockerfile
+      image: aibasedchatbotcapstone-frontend
+      ports:
+        - "5173:5173"
+      depends_on:
+        - backend  
+      networks:
+        - chatbot-network
+
+networks:
+  chatbot-network:
+    driver: bridge
